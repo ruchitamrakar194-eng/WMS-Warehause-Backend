@@ -297,6 +297,7 @@ async function start() {
         { t: 'sales_orders', c: 'tags', type: 'VARCHAR(255)' },
         { t: 'sales_orders', c: 'batch_id', type: 'INT DEFAULT 0' },
         { t: 'sales_orders', c: 'order_lock', type: 'BOOLEAN DEFAULT false' },
+        { t: 'sales_orders', c: 'sequence_number', type: 'INT' },
         { t: 'products', c: 'default_picking_location_id', type: 'INT' },
         { t: 'products', c: 'is_discontinued', type: 'TINYINT(1) DEFAULT 0' },
         { t: 'products', c: 'client_id', type: 'INT' },

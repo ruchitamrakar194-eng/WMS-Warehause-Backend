@@ -114,5 +114,18 @@ async function importCsv(req, res, next) {
   }
 }
 
-module.exports = { list, getById, create, update, remove, bulkAction, allocate, allocateAll, listSavedAddresses, saveAddress, importCsv };
+async function downloadPdf(req, res, next) {
+  try {
+    const { buffer, filename } = await orderService.generateDespatchNotePdf(req.params.id, req.user);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(buffer);
+  } catch (err) {
+    if (err.message === 'Order not found') return res.status(404).json({ success: false, message: err.message });
+    next(err);
+  }
+}
+
+module.exports = { list, getById, create, update, remove, bulkAction, allocate, allocateAll, listSavedAddresses, saveAddress, importCsv, downloadPdf };
+
 

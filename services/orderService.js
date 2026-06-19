@@ -1190,4 +1190,257 @@ async function importCsv(rows, reqUser) {
   }
 }
 
-module.exports = { list, getById, create, update, remove, bulkAction, allocateAllOrders, importCsv };
+function drawCode39Barcode(doc, value, x, y, height = 30, widthPerModule = 0.75) {
+  // Convert value to uppercase and sanitize
+  const cleanVal = '*' + String(value || '').toUpperCase().replace(/[^0-9A-Z\-.\s$/+%]/g, '') + '*';
+  
+  const patterns = {
+    '0': '101001101101', '1': '110100101011', '2': '101100101011', '3': '110110010101',
+    '4': '101001101011', '5': '110100110101', '6': '101100110101', '7': '101001011011',
+    '8': '110100101101', '9': '101100101101', 'A': '110101001011', 'B': '101101001011',
+    'C': '110110100101', 'D': '101011001011', 'E': '110101100101', 'F': '101101100101',
+    'G': '101010011011', 'H': '110101001101', 'I': '101101001101', 'J': '101011001101',
+    'K': '110101010011', 'L': '101101010011', 'M': '110110101001', 'N': '101011010011',
+    'O': '110101101001', 'P': '101101101001', 'Q': '101010110011', 'R': '110101011001',
+    'S': '101101011001', 'T': '101011011001', 'U': '110010101011', 'V': '100110101011',
+    'W': '110011010101', 'X': '100101101011', 'Y': '110010110101', 'Z': '100110110101',
+    '-': '100101011011', '.': '110010101101', ' ': '100110101101', '*': '100101101101',
+    '$': '100100100101', '/': '100100101001', '+': '100101001001', '%': '101001001001'
+  };
+
+  let currentX = x;
+  doc.save();
+  doc.fillColor('#000000');
+  for (let i = 0; i < cleanVal.length; i++) {
+    const char = cleanVal[i];
+    const pattern = patterns[char];
+    if (!pattern) continue;
+    for (let j = 0; j < pattern.length; j++) {
+      if (pattern[j] === '1') {
+        doc.rect(currentX, y, widthPerModule, height);
+      }
+      currentX += widthPerModule;
+    }
+    currentX += widthPerModule; // inter-character gap
+  }
+  doc.fill();
+  doc.restore();
+
+  // Print text label under barcode
+  const barcodeWidth = currentX - x;
+  doc.fontSize(8).fillColor('#000000').font('Helvetica');
+  doc.text(String(value), x, y + height + 2, { width: barcodeWidth, align: 'center' });
+}
+
+async function generateDespatchNotePdf(id, reqUser) {
+  const order = await getById(id, reqUser);
+  const company = await Company.findByPk(order.companyId);
+  
+  const PDFDocument = require('pdfkit');
+  const axios = require('axios');
+  const fs = require('fs');
+  const path = require('path');
+  const os = require('os');
+  const crypto = require('crypto');
+
+  const doc = new PDFDocument({ size: 'A4', margin: 40 });
+  const buffers = [];
+  doc.on('data', (d) => buffers.push(d));
+
+  // --- HEADER SECTION ---
+  let headerImageUrl = order.Client?.header_image_url || company?.header_image_url;
+  let logoLoaded = false;
+  let currentY = 40;
+
+  if (headerImageUrl) {
+    const tempFilePath = path.join(os.tmpdir(), `despatch_logo_${crypto.randomBytes(4).toString('hex')}.jpg`);
+    try {
+      let finalUrl = headerImageUrl;
+      if (finalUrl.includes('cloudinary.com') && finalUrl.includes('/upload/')) {
+        finalUrl = finalUrl.replace('/upload/', '/upload/f_jpg,q_auto,w_1200/');
+      }
+      const separator = finalUrl.includes('?') ? '&' : '?';
+      finalUrl += `${separator}t=${Date.now()}`;
+
+      const response = await axios.get(finalUrl, {
+        responseType: 'arraybuffer',
+        timeout: 15000,
+        headers: {
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache',
+          'Expires': '0'
+        }
+      });
+
+      const buffer = Buffer.from(new Uint8Array(response.data));
+      fs.writeFileSync(tempFilePath, buffer);
+
+      if (fs.existsSync(tempFilePath)) {
+        if (order.Client?.header_image_url) {
+          doc.image(tempFilePath, 40, 15, { width: 515, height: 75 });
+          logoLoaded = true;
+          currentY = 100;
+        } else {
+          doc.image(tempFilePath, 40, 15, { fit: [120, 60] });
+          logoLoaded = true;
+          currentY = 85;
+        }
+        doc.on('end', () => {
+          try { if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath); } catch (e) { }
+        });
+      }
+    } catch (err) {
+      console.error('[PDF] Logo load failed:', err.message);
+      try { if (fs.existsSync(tempFilePath)) fs.unlinkSync(tempFilePath); } catch (e) { }
+    }
+  }
+
+  // --- COMPANY INFO ON TOP-RIGHT (Only if NOT using client banner) ---
+  if (!order.Client?.header_image_url) {
+    doc.fontSize(12).font('Helvetica-Bold').fillColor('#333333');
+    doc.text(company?.name || '', 300, 20, { align: 'right', width: 255 });
+    doc.fontSize(9).font('Helvetica').fillColor('#666666');
+    doc.text(company?.address || '', 300, doc.y, { align: 'right', width: 255 });
+    if (company?.phone || company?.email) {
+      doc.text(`${company?.phone || ''} ${company?.email ? '| ' + company?.email : ''}`, 300, doc.y, { align: 'right', width: 255 });
+    }
+  }
+
+  currentY = Math.max(logoLoaded ? 105 : 80, doc.y + 20);
+
+  // Separator line
+  doc.moveTo(40, currentY).lineTo(555, currentY).strokeColor('#eeeeee').lineWidth(1).stroke();
+
+  doc.y = currentY + 10;
+
+  // Title
+  doc.fontSize(20).font('Helvetica-Bold').fillColor('#333333').text('DESPATCH NOTE / PACKING SLIP', 40, doc.y);
+  doc.moveDown(0.5);
+
+  // Address and Info Columns
+  const infoTop = doc.y;
+
+  // Left Column: Ship To Address
+  doc.fontSize(10).font('Helvetica-Bold').fillColor('#555555').text('SHIP TO:', 40, infoTop);
+  doc.fontSize(9).font('Helvetica').fillColor('#111111');
+  
+  const recipientName = order.recipientName || order.Client?.name || '-';
+  doc.text(recipientName, 40, doc.y + 3);
+  if (order.addressLine1) doc.text(order.addressLine1, 40);
+  if (order.addressLine2) doc.text(order.addressLine2, 40);
+  if (order.addressLine3) doc.text(order.addressLine3, 40);
+  
+  let townCountyPostcode = [order.town, order.county, order.postcode].filter(Boolean).join(', ');
+  if (townCountyPostcode) {
+    doc.text(townCountyPostcode, 40);
+  } else {
+    const fallbackPostcode = order.postcode || order.Client?.postcode || '';
+    const fallbackCity = order.town || order.Client?.city || '';
+    const fallbackState = order.county || order.Client?.state || '';
+    const fallbackLine = [fallbackCity, fallbackState, fallbackPostcode].filter(Boolean).join(', ');
+    if (fallbackLine) doc.text(fallbackLine, 40);
+  }
+  
+  const countryStr = order.country || order.Client?.country || '';
+  if (countryStr) doc.text(countryStr.toUpperCase(), 40);
+
+  const phoneStr = order.phone || order.Client?.phone || '';
+  const emailStr = order.email || order.Client?.email || '';
+  if (phoneStr || emailStr) {
+    doc.fillColor('#666666');
+    doc.text(`${phoneStr} ${emailStr ? '| ' + emailStr : ''}`, 40);
+  }
+
+  // Right Column: Order Details
+  const rightColumnX = 320;
+  doc.fontSize(10).font('Helvetica-Bold').fillColor('#555555').text('ORDER DETAILS:', rightColumnX, infoTop);
+  doc.fontSize(9).font('Helvetica').fillColor('#444444');
+  
+  let detailY = infoTop + 15;
+  const drawDetailRow = (label, value) => {
+    doc.font('Helvetica-Bold').fillColor('#555555').text(label, rightColumnX, detailY, { width: 100, continued: true });
+    doc.font('Helvetica').fillColor('#111111').text(value);
+    detailY = doc.y;
+  };
+
+  drawDetailRow('Order Number: ', order.orderNumber);
+  drawDetailRow('Seq Number: ', order.sequenceNumber ? String(order.sequenceNumber) : '-');
+  if (order.externalRef) drawDetailRow('External Ref: ', order.externalRef);
+  
+  const orderDateStr = order.orderDate || (order.createdAt ? new Date(order.createdAt).toLocaleDateString('en-GB') : '-');
+  drawDetailRow('Order Date: ', orderDateStr);
+
+  const courierName = order.courierName || '-';
+  const courierService = order.courierService || '-';
+  drawDetailRow('Courier: ', `${courierName} (${courierService})`);
+  
+  // Render Barcode of Order Number
+  const barcodeY = detailY + 10;
+  drawCode39Barcode(doc, order.orderNumber, rightColumnX, barcodeY, 30, 0.75);
+
+  // Position below the columns
+  doc.y = Math.max(doc.y, barcodeY + 50);
+  doc.moveDown();
+
+  doc.fontSize(12).font('Helvetica-Bold').fillColor('#000000').text('Packed Items Checklist', 40, doc.y, { underline: true });
+  doc.moveDown(0.5);
+
+  // --- ITEMS TABLE ---
+  const tableTop = doc.y;
+  doc.fontSize(8).font('Helvetica-Bold').fillColor('#555555');
+  doc.text('SKU', 40, tableTop, { width: 100, lineBreak: false });
+  doc.text('Product Name', 150, tableTop, { width: 280, lineBreak: false });
+  doc.text('Qty Ordered', 440, tableTop, { width: 60, align: 'right', lineBreak: false });
+  doc.text('Verified', 510, tableTop, { width: 45, align: 'center', lineBreak: false });
+
+  doc.moveTo(40, tableTop + 14).lineTo(555, tableTop + 14).strokeColor('#cccccc').lineWidth(0.5).stroke();
+  doc.y = tableTop + 20;
+
+  for (const item of (order.OrderItems || [])) {
+    if (doc.y > 740) {
+      doc.addPage();
+      doc.fontSize(8).font('Helvetica-Bold').fillColor('#555555');
+      doc.text('SKU', 40, 40, { width: 100, lineBreak: false });
+      doc.text('Product Name', 150, 40, { width: 280, lineBreak: false });
+      doc.text('Qty Ordered', 440, 40, { width: 60, align: 'right', lineBreak: false });
+      doc.text('Verified', 510, 40, { width: 45, align: 'center', lineBreak: false });
+      doc.moveTo(40, 54).lineTo(555, 54).strokeColor('#cccccc').lineWidth(0.5).stroke();
+      doc.y = 60;
+    }
+
+    const rowY = doc.y;
+    doc.fontSize(8.5).font('Helvetica').fillColor('#111111');
+    
+    const sku = item.Product?.sku || '-';
+    const name = item.Product?.name || item.productName || '-';
+    const qty = item.quantity || 0;
+
+    doc.text(sku, 40, rowY, { width: 100, ellipsis: true });
+    doc.text(name, 150, rowY, { width: 280, ellipsis: true });
+    doc.text(String(qty), 440, rowY, { width: 60, align: 'right' });
+    
+    // Draw tick box
+    doc.rect(525, rowY - 1, 10, 10).strokeColor('#999999').lineWidth(0.5).stroke();
+
+    doc.y = rowY + 18;
+  }
+
+  doc.moveDown(1);
+  if (doc.y > 700) doc.addPage();
+
+  if (order.notes) {
+    doc.fontSize(9).font('Helvetica-Bold').fillColor('#555555').text('Notes / Instructions:', 40, doc.y);
+    doc.fontSize(9).font('Helvetica').fillColor('#333333').text(order.notes, 40, doc.y + 3, { width: 480 });
+    doc.moveDown();
+  }
+
+  doc.fontSize(9).font('Helvetica').fillColor('#666666');
+  doc.text('Please verify all contents before accepting delivery. Thank you for your business!', 40, doc.y + 15, { align: 'center', width: 515 });
+
+  doc.end();
+  const buffer = await new Promise((resolve) => doc.on('end', () => resolve(Buffer.concat(buffers))));
+  return { buffer, filename: `DespatchNote-${order.orderNumber}.pdf` };
+}
+
+module.exports = { list, getById, create, update, remove, bulkAction, allocateAllOrders, importCsv, generateDespatchNotePdf };
+

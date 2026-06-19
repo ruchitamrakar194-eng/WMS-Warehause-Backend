@@ -64,6 +64,7 @@ app.get('/api/orders/saved-addresses', authenticate, requireRole(...soRoles), or
 app.post('/api/orders/saved-addresses', authenticate, requireRole(...soWriteRoles), orderController.saveAddress);
 app.post('/api/orders/sales/allocate-all', authenticate, requireRole('super_admin', 'company_admin', 'warehouse_manager', 'inventory_manager'), orderController.allocateAll);
 app.get('/api/orders/sales/:id', authenticate, requireRole(...soRoles), orderController.getById);
+app.get('/api/orders/sales/:id/pdf', authenticate, requireRole(...soRoles), orderController.downloadPdf);
 app.put('/api/orders/sales/:id', authenticate, requireRole(...soWriteRoles), orderController.update);
 app.delete('/api/orders/sales/:id', authenticate, requireRole(...soWriteRoles), orderController.remove);
 app.post('/api/orders/sales/:id/allocate', authenticate, requireRole('super_admin', 'company_admin', 'warehouse_manager', 'inventory_manager'), orderController.allocate);

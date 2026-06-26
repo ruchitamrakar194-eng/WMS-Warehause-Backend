@@ -85,6 +85,7 @@ async function listSavedAddresses(req, res, next) {
   try {
     const data = await SavedAddress.findAll({
       where: { companyId: req.user.companyId },
+      include: [{ association: 'Client', attributes: ['id', 'name', 'code'] }],
       order: [['recipientName', 'ASC']]
     });
     res.json({ success: true, data });
@@ -126,6 +127,52 @@ async function downloadPdf(req, res, next) {
   }
 }
 
-module.exports = { list, getById, create, update, remove, bulkAction, allocate, allocateAll, listSavedAddresses, saveAddress, importCsv, downloadPdf };
+async function updateSavedAddress(req, res, next) {
+  try {
+    const address = await SavedAddress.findByPk(req.params.id);
+    if (!address) return res.status(404).json({ success: false, message: 'Address not found' });
+    if (req.user.role !== 'super_admin' && address.companyId !== req.user.companyId) {
+      return res.status(403).json({ success: false, message: 'Access denied' });
+    }
+    await address.update(req.body);
+    res.json({ success: true, data: address });
+  } catch (err) {
+    next(err);
+  }
+}
 
+async function deleteSavedAddress(req, res, next) {
+  try {
+    const address = await SavedAddress.findByPk(req.params.id);
+    if (!address) return res.status(404).json({ success: false, message: 'Address not found' });
+    if (req.user.role !== 'super_admin' && address.companyId !== req.user.companyId) {
+      return res.status(403).json({ success: false, message: 'Access denied' });
+    }
+    await address.destroy();
+    res.json({ success: true, message: 'Address deleted successfully' });
+  } catch (err) {
+    next(err);
+  }
+}
 
+async function syncReservations(req, res, next) {
+  try {
+    const result = await orderService.syncReservations(req.user);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    if (err.message?.includes('Not authorized')) return res.status(403).json({ success: false, message: err.message });
+    next(err);
+  }
+}
+
+async function markAsPrinted(req, res, next) {
+  try {
+    const result = await orderService.markAsPrinted(req.params.id, req.user);
+    res.json(result);
+  } catch (err) {
+    if (err.message === 'Order not found') return res.status(404).json({ success: false, message: err.message });
+    next(err);
+  }
+}
+
+module.exports = { list, getById, create, update, remove, bulkAction, allocate, allocateAll, listSavedAddresses, saveAddress, importCsv, downloadPdf, updateSavedAddress, deleteSavedAddress, syncReservations, markAsPrinted };

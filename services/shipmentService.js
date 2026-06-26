@@ -35,7 +35,10 @@ async function getById(id, reqUser) {
 async function create(data, reqUser) {
   const order = await SalesOrder.findByPk(data.salesOrderId);
   if (!order) throw new Error('Order not found');
-  if (order.status !== 'PACKED' && order.status !== 'CONFIRMED') throw new Error('Order must be packed or confirmed first');
+  const allowedForShipment = ['PACKED', 'CONFIRMED', 'ALLOCATED', 'PRINTED', 'PICKED', 'PACKING'];
+  if (!allowedForShipment.includes(order.status)) {
+    throw new Error('Order must be packed or allocated first');
+  }
   if (reqUser.role !== 'super_admin' && order.companyId !== reqUser.companyId) throw new Error('Order not found');
 
   const existing = await Shipment.findOne({ where: { salesOrderId: data.salesOrderId } });
@@ -79,11 +82,11 @@ async function update(id, data, reqUser) {
   if (!order) return getById(id, reqUser);
 
   if (data.deliveryStatus === 'SHIPPED' || data.deliveryStatus === 'IN_TRANSIT') {
-    await order.update({ status: 'SHIPPED' });
+    await order.update({ status: 'DISPATCHED' });
   } else if (data.deliveryStatus === 'DELIVERED') {
     await order.update({ status: 'COMPLETED' });
   } else if (data.deliveryStatus === 'FAILED' || data.deliveryStatus === 'RETURNED') {
-    await order.update({ status: 'SHIPPED' });
+    await order.update({ status: 'DISPATCHED' });
   }
 
   // Shipped/Delivered hone ke baad inventory & product stock se quantity minus (sirf ek hi bar)

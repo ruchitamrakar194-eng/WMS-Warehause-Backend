@@ -963,6 +963,9 @@ async function removeCategory(id, reqUser) {
 }
 
 async function listStock(reqUser, query = {}) {
+  const { ProductStock, OrderItem, SalesOrder, Product, Warehouse, Client } = require('../models');
+  const { Op } = require('sequelize');
+
   const where = {};
   if (reqUser.role !== 'super_admin' && reqUser.companyId) {
     where.companyId = reqUser.companyId;
@@ -978,6 +981,7 @@ async function listStock(reqUser, query = {}) {
   if (query.productId) where.productId = query.productId;
   if (query.locationId) where.locationId = query.locationId;
   if (query.batchNumber) where.batchNumber = query.batchNumber;
+
   const stocks = await ProductStock.findAll({
     where,
     include: [
@@ -987,7 +991,93 @@ async function listStock(reqUser, query = {}) {
       { association: 'Client', attributes: ['id', 'name', 'code'], required: false },
     ],
   });
-  return stocks;
+
+  // Calculate active reservations (all order items linked to active orders)
+  // Only query reservations if we are not filtering down to a specific Location or Batch
+  if (query.locationId || query.batchNumber) {
+    return stocks;
+  }
+
+  const orderItemWhere = {};
+  if (query.productId) orderItemWhere.productId = query.productId;
+  if (query.warehouseId) orderItemWhere.warehouseId = query.warehouseId;
+
+  const salesOrderWhere = {
+    status: { [Op.in]: ['DRAFT', 'NEW', 'CONFIRMED', 'ALLOCATED', 'PRINTED', 'PICKING_IN_PROGRESS', 'PICKING', 'PICKED', 'PACKING_IN_PROGRESS', 'PACKING', 'PACKED', 'BACKORDER'] }
+  };
+  if (reqUser.role !== 'super_admin' && reqUser.companyId) {
+    salesOrderWhere.companyId = reqUser.companyId;
+  }
+  if (reqUser.clientId) {
+    salesOrderWhere.customerId = reqUser.clientId;
+  } else if (query.clientId) {
+    salesOrderWhere.customerId = query.clientId;
+  }
+
+  const activeItems = await OrderItem.findAll({
+    where: orderItemWhere,
+    include: [{
+      model: SalesOrder,
+      as: 'SalesOrder',
+      where: salesOrderWhere,
+      required: true
+    }]
+  });
+
+  // Group active order items by productId + warehouseId
+  const reservationMap = {};
+  for (const item of activeItems) {
+    const key = `${item.productId}-${item.warehouseId}`;
+    reservationMap[key] = (reservationMap[key] || 0) + (Number(item.quantity) || 0);
+  }
+
+  // Group physical reservations by productId + warehouseId
+  const stockReservationMap = {};
+  for (const row of stocks) {
+    const key = `${row.productId}-${row.warehouseId}`;
+    stockReservationMap[key] = (stockReservationMap[key] || 0) + (Number(row.reserved) || 0);
+  }
+
+  // Find any unassigned soft-allocations (reservations not mapped to physical stock rows)
+  const mockStocks = [];
+  for (const key of Object.keys(reservationMap)) {
+    const totalReserved = reservationMap[key];
+    const stockReserved = stockReservationMap[key] || 0;
+    if (totalReserved > stockReserved) {
+      const diff = totalReserved - stockReserved;
+      const [pId, whId] = key.split('-').map(Number);
+
+      // Fetch Product, Warehouse, Client metadata for the mock row
+      const product = await Product.findByPk(pId);
+      if (!product || (reqUser.role !== 'super_admin' && product.companyId !== reqUser.companyId)) continue;
+      
+      const warehouse = await Warehouse.findByPk(whId, { include: ['Company'] });
+      let client = null;
+      if (reqUser.clientId || query.clientId) {
+        client = await Client.findByPk(reqUser.clientId || query.clientId, { attributes: ['id', 'name', 'code'] });
+      } else if (product?.clientId) {
+        client = await Client.findByPk(product.clientId, { attributes: ['id', 'name', 'code'] });
+      }
+
+      mockStocks.push({
+        id: `mock-${pId}-${whId}`,
+        companyId: reqUser.companyId || product.companyId,
+        productId: pId,
+        warehouseId: whId,
+        locationId: null,
+        quantity: 0,
+        reserved: diff,
+        status: 'ACTIVE',
+        Product: product,
+        Warehouse: warehouse,
+        Location: null,
+        Client: client,
+        toJSON() { return this; }
+      });
+    }
+  }
+
+  return stocks.concat(mockStocks);
 }
 
 async function createStock(data, reqUser) {
@@ -1059,6 +1149,10 @@ async function createStock(data, reqUser) {
       reason: 'Manual Stock Creation',
       userId: reqUser.id
     }, { transaction });
+
+    // Re-sync reservations for this product in this warehouse
+    const orderService = require('./orderService');
+    await orderService.syncReservationsForProduct(data.productId, data.warehouseId, transaction);
 
     await transaction.commit();
 
@@ -1134,6 +1228,13 @@ async function updateStock(stockId, data, reqUser) {
       bestBeforeDate: data.bestBeforeDate !== undefined ? data.bestBeforeDate : stock.bestBeforeDate,
     }, { transaction });
 
+    // Re-sync reservations for the new and/or old product in the new/old warehouse
+    const orderService = require('./orderService');
+    await orderService.syncReservationsForProduct(newProductId, newWarehouseId, transaction);
+    if (oldProductId !== newProductId || oldWarehouseId !== newWarehouseId) {
+      await orderService.syncReservationsForProduct(oldProductId, oldWarehouseId, transaction);
+    }
+
     await transaction.commit();
     return stock;
   } catch (err) {
@@ -1185,6 +1286,10 @@ async function removeStock(stockId, reqUser) {
     }
 
     await stock.destroy({ transaction });
+
+    // Re-sync reservations for this product in this warehouse
+    const orderService = require('./orderService');
+    await orderService.syncReservationsForProduct(stock.productId, stock.warehouseId, transaction);
 
     await transaction.commit();
     return { message: 'Stock record deleted' };
@@ -1502,6 +1607,10 @@ async function createAdjustment(data, reqUser) {
     }, { transaction });
 
     await adjustment.update({ status: 'COMPLETED' }, { transaction });
+
+    // Re-sync reservations for this product in this warehouse
+    const orderService = require('./orderService');
+    await orderService.syncReservationsForProduct(data.productId, warehouseId, transaction);
 
     await transaction.commit();
 
@@ -2627,6 +2736,10 @@ async function stockIn(data, reqUser) {
       userId: reqUser.id
     }, { transaction });
 
+    // Re-sync reservations for this product in this warehouse
+    const orderService = require('./orderService');
+    await orderService.syncReservationsForProduct(productId, warehouseId, transaction);
+
     await transaction.commit();
     return inventory.reload();
   } catch (err) {
@@ -2696,6 +2809,10 @@ async function stockOut(data, reqUser) {
       reason: 'Manual Stock Out',
       userId: reqUser.id
     }, { transaction });
+
+    // Re-sync reservations for this product in this warehouse
+    const orderService = require('./orderService');
+    await orderService.syncReservationsForProduct(productId, warehouseId, transaction);
 
     await transaction.commit();
     return inventory.reload();
@@ -2903,6 +3020,13 @@ async function transferStock(data, reqUser) {
       createdBy: reqUser.id,
     }, { transaction: t });
 
+    // Re-sync reservations for this product in the source and destination warehouses
+    const orderService = require('./orderService');
+    await orderService.syncReservationsForProduct(productId, fromWarehouseId, t);
+    if (fromWarehouseId !== toWarehouseId) {
+      await orderService.syncReservationsForProduct(productId, toWarehouseId, t);
+    }
+
     return { success: true };
   });
 }
@@ -2950,6 +3074,11 @@ async function transfer(data, reqUser) {
       quantity,
       referenceId: `From WH: ${fromWarehouseId}`
     }, { transaction: t });
+
+    // Re-sync reservations for this product in the source and destination warehouses
+    const orderService = require('./orderService');
+    await orderService.syncReservationsForProduct(productId, fromWarehouseId, t);
+    await orderService.syncReservationsForProduct(productId, toWarehouseId, t);
 
     return { success: true };
   });
@@ -3418,7 +3547,9 @@ async function bulkActionProducts(action, productIds, reqUser) {
 
 async function reserveStockSoft(data, t) {
   const { productId, warehouseId, quantity } = data;
-  const { Inventory, InventoryLog } = require('../models');
+  const { Inventory, InventoryLog, ProductStock } = require('../models');
+
+  // 1. Update warehouse-level summary (Inventory table) — for display on Inventory page
   const [inv] = await Inventory.findOrCreate({
     where: { productId, warehouseId },
     defaults: { quantity: 0, reservedQuantity: 0 },
@@ -3426,6 +3557,37 @@ async function reserveStockSoft(data, t) {
   });
   await inv.increment('reservedQuantity', { by: quantity, transaction: t });
 
+  // 2. FIFO soft-reserve on granular ProductStock rows — prevents overselling
+  // This ensures that even if two orders are created simultaneously, each ProductStock row
+  // tracks its own reservation so the same physical stock can't be double-booked.
+  const stockRows = await ProductStock.findAll({
+    where: {
+      productId,
+      warehouseId,
+      status: 'ACTIVE',
+      quantity: { [Op.gt]: sequelize.col('reserved') }
+    },
+    order: [
+      ['createdAt', 'ASC'] // FIFO — oldest stock reserved first
+    ],
+    transaction: t,
+    lock: t ? t.LOCK.UPDATE : undefined
+  });
+
+  let remaining = quantity;
+  for (const row of stockRows) {
+    if (remaining <= 0) break;
+    const availableInRow = Number(row.quantity) - Number(row.reserved);
+    if (availableInRow <= 0) continue;
+    const toReserve = Math.min(availableInRow, remaining);
+    await row.increment('reserved', { by: toReserve, transaction: t });
+    remaining -= toReserve;
+  }
+  // Note: if remaining > 0 after FIFO scan, it means stock is insufficient.
+  // The caller (orderService) validates this BEFORE calling reserveStockSoft,
+  // so we allow a soft "best effort" here without throwing.
+
+  // 3. Audit log
   await InventoryLog.create({
     productId,
     warehouseId,
@@ -3441,7 +3603,9 @@ async function reserveStockSoft(data, t) {
 
 async function unreserveStockSoft(data, t) {
   const { productId, warehouseId, quantity } = data;
-  const { Inventory, InventoryLog } = require('../models');
+  const { Inventory, InventoryLog, ProductStock } = require('../models');
+
+  // 1. Roll back warehouse-level summary (Inventory table)
   const inv = await Inventory.findOne({
     where: { productId, warehouseId },
     transaction: t
@@ -3450,18 +3614,47 @@ async function unreserveStockSoft(data, t) {
     const toDeduct = Math.min(Number(inv.reservedQuantity), quantity);
     if (toDeduct > 0) {
       await inv.decrement('reservedQuantity', { by: toDeduct, transaction: t });
-
-      await InventoryLog.create({
-        productId,
-        warehouseId,
-        type: 'DEALLOCATE',
-        quantity: -toDeduct,
-        referenceId: data.referenceId || null,
-        reason: data.reason || 'Stock Unreservation',
-        userId: data.userId || null
-      }, { transaction: t });
     }
   }
+
+  // 2. LIFO roll-back on granular ProductStock rows (reverse of reservation)
+  const stockRows = await ProductStock.findAll({
+    where: {
+      productId,
+      warehouseId,
+      status: 'ACTIVE',
+      reserved: { [Op.gt]: 0 }
+    },
+    order: [
+      ['createdAt', 'DESC'] // LIFO — most recently reserved row, unreserve first
+    ],
+    transaction: t,
+    lock: t ? t.LOCK.UPDATE : undefined
+  });
+
+  let remaining = quantity;
+  for (const row of stockRows) {
+    if (remaining <= 0) break;
+    const reservedInRow = Number(row.reserved);
+    const toUnreserve = Math.min(reservedInRow, remaining);
+    await row.decrement('reserved', { by: toUnreserve, transaction: t });
+    remaining -= toUnreserve;
+  }
+
+  // 3. Audit log
+  if (inv) {
+    const logged = Math.min(Number(inv.reservedQuantity) + quantity, quantity); // Always log requested qty
+    await InventoryLog.create({
+      productId,
+      warehouseId,
+      type: 'DEALLOCATE',
+      quantity: -quantity,
+      referenceId: data.referenceId || null,
+      reason: data.reason || 'Stock Unreservation',
+      userId: data.userId || null
+    }, { transaction: t });
+  }
+
   return { success: true };
 }
 

@@ -20,6 +20,7 @@ const Customer = sequelize.define('Customer', {
   creditLimit: { type: DataTypes.DECIMAL(15, 2), allowNull: true, defaultValue: 0 },
   paymentTerms: { type: DataTypes.STRING, allowNull: true }, // COD, Net 30, etc.
   header_image_url: { type: DataTypes.STRING, allowNull: true },
+  packing_slip_footer: { type: DataTypes.TEXT, allowNull: true },
   status: { type: DataTypes.STRING, allowNull: true, defaultValue: 'ACTIVE' }, // ACTIVE, INACTIVE
 }, {
   tableName: 'customers',

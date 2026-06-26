@@ -45,14 +45,14 @@ async function stats(req, res, next) {
       SalesOrder.count({
         where: {
           ...baseWhere,
-          status: { [Op.in]: ['pending', 'pick_list_created', 'picking', 'packing'] },
+          status: { [Op.in]: ['pending', 'pick_list_created', 'picking', 'packing', 'DRAFT', 'NEW', 'CONFIRMED', 'ALLOCATED', 'PRINTED', 'PICKING_IN_PROGRESS', 'PICKING', 'PICKED', 'PACKING_IN_PROGRESS', 'PACKING', 'PACKED', 'BACKORDER'] },
         },
       }),
       // Orders completed today (shipped)
       SalesOrder.count({
         where: {
           ...baseWhere,
-          status: 'shipped',
+          status: { [Op.in]: ['shipped', 'SHIPPED', 'DISPATCHED', 'COMPLETED'] },
           updatedAt: { [Op.gte]: todayStart }
         }
       }),
@@ -333,7 +333,7 @@ async function reports(req, res, next) {
       SalesOrder.count({
         where: {
           ...baseWhere,
-          status: { [Op.in]: ['pending', 'pick_list_created', 'picking', 'packing'] },
+          status: { [Op.in]: ['pending', 'pick_list_created', 'picking', 'packing', 'DRAFT', 'NEW', 'CONFIRMED', 'ALLOCATED', 'PRINTED', 'PICKING_IN_PROGRESS', 'PICKING', 'PICKED', 'PACKING_IN_PROGRESS', 'PACKING', 'PACKED', 'BACKORDER'] },
         },
       }),
       SalesOrder.count({ where: baseWhere }),
@@ -493,7 +493,7 @@ async function notifications(req, res, next) {
       }
       
       if (user.role === 'inventory_manager') {
-        const pendingPOs = await SalesOrder.count({ where: { companyId, status: 'pending' } });
+        const pendingPOs = await SalesOrder.count({ where: { companyId, status: { [Op.in]: ['NEW', 'DRAFT'] } } });
         if (pendingPOs > 0) {
           alerts.push({ id: 'pending-orders', title: 'New Orders', message: `${pendingPOs} new orders received today.`, type: 'info', link: '/sales-orders' });
         }

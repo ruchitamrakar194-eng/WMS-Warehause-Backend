@@ -148,7 +148,7 @@ async function create(data, reqUser) {
           model: SalesOrder,
           where: {
             ...where,
-            status: { [Op.notIn]: ['DRAFT', 'CANCELLED'] },
+            status: { [Op.notIn]: ['DRAFT', 'NEW', 'CANCELLED'] },
             ...(companyId ? { companyId } : {})
           },
           attributes: []

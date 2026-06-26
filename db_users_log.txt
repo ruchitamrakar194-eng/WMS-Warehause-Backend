@@ -1,0 +1,92 @@
+[
+  {
+    "id": 1,
+    "name": "Super Administrator",
+    "email": "admin@kiaan-wms.com",
+    "role": "super_admin"
+  },
+  {
+    "id": 2,
+    "name": "company",
+    "email": "companyadmin@kiaan-wms.com",
+    "role": "company_admin"
+  },
+  {
+    "id": 5,
+    "name": "inventory manager",
+    "email": "inventorymanager@kiaan-wms.com",
+    "role": "inventory_manager"
+  },
+  {
+    "id": 6,
+    "name": "warehouse manager 1",
+    "email": "warehousemanager@kiaan-wms.com",
+    "role": "warehouse_manager"
+  },
+  {
+    "id": 14,
+    "name": "piker",
+    "email": "piker@gmail.com",
+    "role": "picker"
+  },
+  {
+    "id": 15,
+    "name": "packer",
+    "email": "packer@gmail.com",
+    "role": "packer"
+  },
+  {
+    "id": 16,
+    "name": "Picker User",
+    "email": "picker@kiaan-wms.com",
+    "role": "picker"
+  },
+  {
+    "id": 17,
+    "name": "Packer User",
+    "email": "packer@kiaan-wms.com",
+    "role": "packer"
+  },
+  {
+    "id": 18,
+    "name": "Viewer User",
+    "email": "viewer@kiaan-wms.com",
+    "role": "viewer"
+  },
+  {
+    "id": 19,
+    "name": "Super Admin",
+    "email": "admin@mywms.com",
+    "role": "super_admin"
+  },
+  {
+    "id": 20,
+    "name": "Company Admin",
+    "email": "companyadmin@mywms.com",
+    "role": "company_admin"
+  },
+  {
+    "id": 21,
+    "name": "Inventory Manager",
+    "email": "inventorymanager@mywms.com",
+    "role": "inventory_manager"
+  },
+  {
+    "id": 22,
+    "name": "Warehouse Manager",
+    "email": "warehousemanager@mywms.com",
+    "role": "warehouse_manager"
+  },
+  {
+    "id": 23,
+    "name": "Picker",
+    "email": "picker@mywms.com",
+    "role": "picker"
+  },
+  {
+    "id": 24,
+    "name": "Packer",
+    "email": "packer@mywms.com",
+    "role": "packer"
+  }
+]

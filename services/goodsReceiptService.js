@@ -593,6 +593,10 @@ async function finalizeReceiving(id, reqUser) {
         userId: reqUser.id
       }, { transaction: t });
 
+      // 7.3 Re-sync Reservations for this product in this warehouse
+      const orderService = require('./orderService');
+      await orderService.syncReservationsForProduct(item.productId, gr.warehouseId, t);
+
       // Update item record
       await item.update({ receivedQty: qtyToBook }, { transaction: t });
     }

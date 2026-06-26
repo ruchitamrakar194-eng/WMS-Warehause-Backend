@@ -38,7 +38,7 @@ async function list(reqUser, query = {}) {
       orderInclude,
       { association: 'Warehouse', attributes: ['id', 'name'] },
       { association: 'User', attributes: ['id', 'name', 'email'], required: false },
-      { association: 'PickListItems', include: ['Product'] },
+      { association: 'PickListItems', include: ['Product', 'Location', 'Warehouse'] },
     ],
   });
   return pickLists;
@@ -50,7 +50,7 @@ async function getById(id, reqUser) {
       { association: 'SalesOrder', include: ['Client'] },
       { association: 'Warehouse' },
       { association: 'User', attributes: { exclude: ['passwordHash'] }, required: false },
-      { association: 'PickListItems', include: ['Product'] },
+      { association: 'PickListItems', include: ['Product', 'Location', 'Warehouse'] },
     ],
   });
   if (!pickList) throw new Error('Pick list not found');
@@ -72,7 +72,7 @@ async function assignPicker(pickListId, userId, reqUser) {
   if (!user || user.role !== 'picker' || user.companyId !== order.companyId) throw new Error('Invalid picker');
 
   await pickList.update({ assignedTo: userId, status: 'ASSIGNED' });
-  await order.update({ status: 'PICKING_IN_PROGRESS' });
+  await order.update({ status: 'PICKING' });
 
   return getById(pickListId, reqUser);
 }
@@ -83,7 +83,7 @@ async function startPicking(id, reqUser) {
   if (reqUser.role === 'picker' && pickList.assignedTo !== reqUser.id) throw new Error('Not assigned to you');
 
   await pickList.update({ status: 'PARTIALLY_PICKED' });
-  await pickList.SalesOrder.update({ status: 'PICKING_IN_PROGRESS' });
+  await pickList.SalesOrder.update({ status: 'PICKING' });
 
   return getById(id, reqUser);
 }
@@ -98,7 +98,7 @@ async function updatePickedQuantity(pickListItemId, quantityPicked, reqUser) {
 
   if (pickList.status === 'NOT_STARTED' || pickList.status === 'ASSIGNED') {
     await pickList.update({ status: 'PARTIALLY_PICKED' });
-    await pickList.SalesOrder.update({ status: 'PICKING_IN_PROGRESS' });
+    await pickList.SalesOrder.update({ status: 'PICKING' });
   }
 
   return item;
@@ -138,9 +138,9 @@ async function rejectAssignment(id, reqUser) {
   if (reqUser.role === 'picker' && pickList.assignedTo !== reqUser.id) throw new Error('Not assigned to you');
 
   await pickList.update({ status: 'NOT_STARTED', assignedTo: null });
-  // Revert order status to CONFIRMED if it was PICKING_IN_PROGRESS, assuming no other active tasks prevent it?
-  // Simply reverting to CONFIRMED seems correct as it goes back to "Ready to Pick" state.
-  await pickList.SalesOrder.update({ status: 'CONFIRMED' });
+  // Revert order status to PRINTED if it was PICKING
+  // Simply reverting to PRINTED seems correct as it goes back to "Printed / Ready to Pick" state.
+  await pickList.SalesOrder.update({ status: 'PRINTED' });
 
   return { message: 'Assignment rejected', id };
 }

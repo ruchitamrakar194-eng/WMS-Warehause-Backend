@@ -62,9 +62,12 @@ app.post('/api/orders/sales/bulk-action', authenticate, requireRole(...soWriteRo
 app.post('/api/orders/sales/import-csv', authenticate, requireRole(...soWriteRoles), orderController.importCsv);
 app.get('/api/orders/saved-addresses', authenticate, requireRole(...soRoles), orderController.listSavedAddresses);
 app.post('/api/orders/saved-addresses', authenticate, requireRole(...soWriteRoles), orderController.saveAddress);
+app.put('/api/orders/saved-addresses/:id', authenticate, requireRole(...soWriteRoles), orderController.updateSavedAddress);
+app.delete('/api/orders/saved-addresses/:id', authenticate, requireRole(...soWriteRoles), orderController.deleteSavedAddress);
 app.post('/api/orders/sales/allocate-all', authenticate, requireRole('super_admin', 'company_admin', 'warehouse_manager', 'inventory_manager'), orderController.allocateAll);
 app.get('/api/orders/sales/:id', authenticate, requireRole(...soRoles), orderController.getById);
 app.get('/api/orders/sales/:id/pdf', authenticate, requireRole(...soRoles), orderController.downloadPdf);
+app.post('/api/orders/sales/:id/printed', authenticate, requireRole(...soRoles), orderController.markAsPrinted);
 app.put('/api/orders/sales/:id', authenticate, requireRole(...soWriteRoles), orderController.update);
 app.delete('/api/orders/sales/:id', authenticate, requireRole(...soWriteRoles), orderController.remove);
 app.post('/api/orders/sales/:id/allocate', authenticate, requireRole('super_admin', 'company_admin', 'warehouse_manager', 'inventory_manager'), orderController.allocate);
@@ -279,6 +282,7 @@ async function start() {
         { t: 'audit_logs', c: 'client_id', type: 'INT' },
         { t: 'companies', c: 'header_image_url', type: 'TEXT' },
         { t: 'customers', c: 'header_image_url', type: 'TEXT' },
+        { t: 'customers', c: 'packing_slip_footer', type: 'TEXT' },
         { t: 'suppliers', c: 'header_image_url', type: 'TEXT' },
         { t: 'order_items', c: 'warehouse_id', type: 'INT' },
         { t: 'sales_orders', c: 'external_ref', type: 'VARCHAR(255)' },
@@ -313,6 +317,11 @@ async function start() {
         { t: 'sales_orders', c: 'county', type: 'VARCHAR(255)' },
         { t: 'sales_orders', c: 'phone', type: 'VARCHAR(255)' },
         { t: 'sales_orders', c: 'email', type: 'VARCHAR(255)' },
+        { t: 'saved_addresses', c: 'customer_id', type: 'INT' },
+        { t: 'pick_list_items', c: 'warehouse_id', type: 'INT' },
+        { t: 'pick_list_items', c: 'location_id', type: 'INT' },
+        { t: 'pick_list_items', c: 'batch_number', type: 'VARCHAR(255)' },
+        { t: 'pick_list_items', c: 'best_before_date', type: 'DATE' },
       ];
       for (const col of manualCols) {
         try {
@@ -395,6 +404,55 @@ async function start() {
     }
 
     console.log('Database synced successfully.');
+
+    // BACKFILL locationId, batchNumber, bestBeforeDate, warehouseId for old PickListItems
+    try {
+      const { PickListItem, PickList, OrderItem } = require('./models');
+      const items = await PickListItem.findAll({ where: { locationId: null } });
+      if (items.length > 0) {
+        console.log(`[DB] Backfilling location/batch details for ${items.length} PickListItems...`);
+        for (const item of items) {
+          const pickList = await PickList.findByPk(item.pickListId);
+          if (pickList) {
+            // Find corresponding OrderItem
+            const orderItem = await OrderItem.findOne({
+              where: {
+                salesOrderId: pickList.salesOrderId,
+                productId: item.productId,
+                quantity: item.quantityRequired
+              }
+            });
+            if (orderItem) {
+              await item.update({
+                locationId: orderItem.locationId,
+                batchNumber: orderItem.batchNumber,
+                bestBeforeDate: orderItem.bestBeforeDate,
+                warehouseId: orderItem.warehouseId
+              });
+            } else {
+              // Fallback to any order item for this salesOrderId and productId
+              const anyOrderItem = await OrderItem.findOne({
+                where: {
+                  salesOrderId: pickList.salesOrderId,
+                  productId: item.productId
+                }
+              });
+              if (anyOrderItem) {
+                await item.update({
+                  locationId: anyOrderItem.locationId,
+                  batchNumber: anyOrderItem.batchNumber,
+                  bestBeforeDate: anyOrderItem.bestBeforeDate,
+                  warehouseId: anyOrderItem.warehouseId
+                });
+              }
+            }
+          }
+        }
+        console.log('[DB] PickListItem backfill complete.');
+      }
+    } catch (e) {
+      console.warn('[DB] PickListItem backfill error:', e.message);
+    }
 
     // BACKFILL warehouse_id for old OrderItems
     try {

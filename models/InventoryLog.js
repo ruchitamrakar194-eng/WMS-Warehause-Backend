@@ -48,28 +48,25 @@ const InventoryLog = sequelize.define('InventoryLog', {
         const psResult = await ProductStock.findOne({
           where: psWhere,
           attributes: [
-            [log.sequelize.fn('SUM', log.sequelize.col('quantity')), 'totalQty'],
-            [log.sequelize.fn('SUM', log.sequelize.col('reserved')), 'totalReserved']
+            [log.sequelize.fn('SUM', log.sequelize.col('quantity')), 'totalQty']
           ],
           raw: true,
           transaction: options.transaction
         });
 
         const physicalQty = Number(psResult?.totalQty) || 0;
-        const hardReserved = Number(psResult?.totalReserved) || 0;
 
-        // 2. Calculate soft reservations from OrderItems for active orders (client-specific if clientId is set)
+        // 2. Calculate active reservations directly from OrderItems (client-specific if clientId is set)
         const orderWhere = {
-          status: ['DRAFT', 'CONFIRMED', 'BACKORDER', 'PICKING_IN_PROGRESS', 'PICKED', 'PACKING_IN_PROGRESS', 'PACKED']
+          status: ['DRAFT', 'NEW', 'CONFIRMED', 'ALLOCATED', 'PRINTED', 'PICKING_IN_PROGRESS', 'PICKING', 'PICKED', 'PACKING_IN_PROGRESS', 'PACKING', 'PACKED', 'BACKORDER']
         };
         if (log.clientId) {
           orderWhere.customerId = log.clientId;
         }
-        const softResult = await OrderItem.findOne({
+        const activeOrdersResult = await OrderItem.findOne({
           where: {
             productId: log.productId,
-            warehouseId: log.warehouseId,
-            locationId: null
+            warehouseId: log.warehouseId
           },
           include: [{
             model: SalesOrder,
@@ -78,24 +75,17 @@ const InventoryLog = sequelize.define('InventoryLog', {
             attributes: []
           }],
           attributes: [
-            [log.sequelize.fn('SUM', log.sequelize.col('quantity')), 'totalSoftReserved']
+            [log.sequelize.fn('SUM', log.sequelize.col('quantity')), 'totalQty']
           ],
           raw: true,
           transaction: options.transaction
         });
 
-        const softReserved = Number(softResult?.totalSoftReserved) || 0;
+        const activeReservedQty = Number(activeOrdersResult?.totalQty) || 0;
 
         // 3. Determine the final physical and reserved levels (for the log)
         let finalPhysical = physicalQty;
-        let finalReserved = hardReserved + softReserved;
-
-        // Adjust for soft reservation changes if they haven't been written to the OrderItem table yet
-        if (log.type === 'ALLOCATE') {
-          finalReserved += Number(log.quantity) || 0;
-        } else if (log.type === 'DEALLOCATE') {
-          finalReserved += Number(log.quantity) || 0;
-        }
+        let finalReserved = activeReservedQty;
 
         // 4. Ensure values are non-negative
         finalPhysical = Math.max(0, finalPhysical);
@@ -107,46 +97,33 @@ const InventoryLog = sequelize.define('InventoryLog', {
           const overallPsResult = await ProductStock.findOne({
             where: { productId: log.productId, warehouseId: log.warehouseId, status: 'ACTIVE' },
             attributes: [
-              [log.sequelize.fn('SUM', log.sequelize.col('quantity')), 'totalQty'],
-              [log.sequelize.fn('SUM', log.sequelize.col('reserved')), 'totalReserved']
+              [log.sequelize.fn('SUM', log.sequelize.col('quantity')), 'totalQty']
             ],
             raw: true,
             transaction: options.transaction
           });
-          const overallPhysicalQty = Number(overallPsResult?.totalQty) || 0;
-          const overallHardReserved = Number(overallPsResult?.totalReserved) || 0;
+          const overallPhysical = Math.max(0, Number(overallPsResult?.totalQty) || 0);
 
-          const overallSoftResult = await OrderItem.findOne({
+          const overallOrderResult = await OrderItem.findOne({
             where: {
               productId: log.productId,
-              warehouseId: log.warehouseId,
-              locationId: null
+              warehouseId: log.warehouseId
             },
             include: [{
               model: SalesOrder,
               as: 'SalesOrder',
               where: {
-                status: ['DRAFT', 'CONFIRMED', 'BACKORDER', 'PICKING_IN_PROGRESS', 'PICKED', 'PACKING_IN_PROGRESS', 'PACKED']
+                status: ['DRAFT', 'NEW', 'CONFIRMED', 'ALLOCATED', 'PRINTED', 'PICKING_IN_PROGRESS', 'PICKING', 'PICKED', 'PACKING_IN_PROGRESS', 'PACKING', 'PACKED', 'BACKORDER']
               },
               attributes: []
             }],
             attributes: [
-              [log.sequelize.fn('SUM', log.sequelize.col('quantity')), 'totalSoftReserved']
+              [log.sequelize.fn('SUM', log.sequelize.col('quantity')), 'totalQty']
             ],
             raw: true,
             transaction: options.transaction
           });
-          const overallSoftReserved = Number(overallSoftResult?.totalSoftReserved) || 0;
-
-          let overallPhysical = overallPhysicalQty;
-          let overallReserved = overallHardReserved + overallSoftReserved;
-
-          if (log.type === 'ALLOCATE' || log.type === 'DEALLOCATE') {
-            overallReserved += Number(log.quantity) || 0;
-          }
-
-          overallPhysical = Math.max(0, overallPhysical);
-          overallReserved = Math.max(0, overallReserved);
+          const overallReserved = Math.max(0, Number(overallOrderResult?.totalQty) || 0);
 
           const [inv] = await Inventory.findOrCreate({
             where: { productId: log.productId, warehouseId: log.warehouseId },

@@ -36,6 +36,7 @@ const SupplierProduct = require('./SupplierProduct');
 const AuditLog = require('./AuditLog');
 const SavedAddress = require('./SavedAddress');
 const CourierMapping = require('./CourierMapping');
+const DespatchNoteTemplate = require('./DespatchNoteTemplate');
 
 
 // Company
@@ -80,10 +81,18 @@ AuditLog.belongsTo(User, { foreignKey: 'userId', as: 'User' });
 // SavedAddress
 Company.hasMany(SavedAddress, { foreignKey: 'companyId' });
 SavedAddress.belongsTo(Company, { foreignKey: 'companyId' });
+Customer.hasMany(SavedAddress, { foreignKey: 'customerId', as: 'SavedAddresses' });
+SavedAddress.belongsTo(Customer, { foreignKey: 'customerId', as: 'Client' });
 
 // CourierMapping
 Company.hasMany(CourierMapping, { foreignKey: 'companyId' });
 CourierMapping.belongsTo(Company, { foreignKey: 'companyId' });
+
+// DespatchNoteTemplate
+Company.hasMany(DespatchNoteTemplate, { foreignKey: 'companyId' });
+DespatchNoteTemplate.belongsTo(Company, { foreignKey: 'companyId' });
+Customer.hasMany(DespatchNoteTemplate, { foreignKey: 'customerId', as: 'DespatchNoteTemplates' });
+DespatchNoteTemplate.belongsTo(Customer, { foreignKey: 'customerId', as: 'Client' });
 
 // Product -> Supplier
 Supplier.hasMany(Product, { foreignKey: 'supplierId' });
@@ -127,6 +136,10 @@ PickList.hasMany(PickListItem, { foreignKey: 'pickListId' });
 PickListItem.belongsTo(PickList, { foreignKey: 'pickListId' });
 PickListItem.belongsTo(Product, { foreignKey: 'productId' });
 Product.hasMany(PickListItem, { foreignKey: 'productId' });
+PickListItem.belongsTo(Location, { foreignKey: 'locationId', as: 'Location' });
+Location.hasMany(PickListItem, { foreignKey: 'locationId' });
+PickListItem.belongsTo(Warehouse, { foreignKey: 'warehouseId', as: 'Warehouse' });
+Warehouse.hasMany(PickListItem, { foreignKey: 'warehouseId' });
 
 SalesOrder.hasMany(PackingTask, { foreignKey: 'salesOrderId' });
 PackingTask.belongsTo(SalesOrder, { foreignKey: 'salesOrderId' });
@@ -296,4 +309,5 @@ module.exports = {
   AuditLog,
   SavedAddress,
   CourierMapping,
+  DespatchNoteTemplate,
 };

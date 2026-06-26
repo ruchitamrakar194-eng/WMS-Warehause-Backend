@@ -94,7 +94,7 @@ async function startPacking(id, reqUser) {
 
     console.log('Updating SalesOrder status to PACKING_IN_PROGRESS');
     if (task.SalesOrder) {
-      await task.SalesOrder.update({ status: 'PACKING_IN_PROGRESS' });
+      await task.SalesOrder.update({ status: 'PACKING' });
     } else {
       console.warn('SalesOrder not found for task', id);
     }

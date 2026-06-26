@@ -1,0 +1,35 @@
+CLIENTS:
+[
+  {
+    "id": 6,
+    "name": "ram",
+    "header_image_url": "https://res.cloudinary.com/dw48hcxi5/image/upload/v1782457672/wms_uploads/urgom9y8fhdf2phmt58b.jpg"
+  },
+  {
+    "id": 7,
+    "name": "rani",
+    "header_image_url": "https://res.cloudinary.com/dw48hcxi5/image/upload/v1782457682/wms_uploads/pbopzj6tugzpz5rjn9hl.png"
+  },
+  {
+    "id": 8,
+    "name": "ABC Pvt Ltd",
+    "header_image_url": "https://res.cloudinary.com/dw48hcxi5/image/upload/v1782457650/wms_uploads/aw0sqhjoczdnnws2jutw.jpg"
+  },
+  {
+    "id": 9,
+    "name": "Jay",
+    "header_image_url": "https://res.cloudinary.com/dw48hcxi5/image/upload/v1782457661/wms_uploads/jictybl0tsxbtuglyqcc.jpg"
+  }
+]
+
+ORDERS:
+Order ID: 62, Num: ORD-0024, Client ID: 9, Client Name: Jay, Header Image URL: https://res.cloudinary.com/dw48hcxi5/image/upload/v1782457661/wms_uploads/jictybl0tsxbtuglyqcc.jpg
+Order ID: 61, Num: ORD-0023, Client ID: 9, Client Name: Jay, Header Image URL: https://res.cloudinary.com/dw48hcxi5/image/upload/v1782457661/wms_uploads/jictybl0tsxbtuglyqcc.jpg
+Order ID: 53, Num: ORD-1780900677513-0022, Client ID: null, Client Name: NONE, Header Image URL: NONE
+Order ID: 52, Num: ORD-1780899592303-0021, Client ID: null, Client Name: NONE, Header Image URL: NONE
+Order ID: 51, Num: ORD-1780899437826-0020, Client ID: null, Client Name: NONE, Header Image URL: NONE
+Order ID: 50, Num: ORD-1780898954491-0019, Client ID: null, Client Name: NONE, Header Image URL: NONE
+Order ID: 49, Num: ORD-1780898943896-0018, Client ID: null, Client Name: NONE, Header Image URL: NONE
+Order ID: 48, Num: ORD-1780740138507-0017, Client ID: null, Client Name: NONE, Header Image URL: NONE
+Order ID: 47, Num: ORD-1780737509551-0016, Client ID: null, Client Name: NONE, Header Image URL: NONE
+Order ID: 46, Num: ORD-1780578859055-0015, Client ID: null, Client Name: NONE, Header Image URL: NONE

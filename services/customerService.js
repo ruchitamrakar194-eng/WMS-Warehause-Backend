@@ -51,6 +51,7 @@ async function create(data, reqUser) {
     creditLimit: data.creditLimit,
     paymentTerms: data.paymentTerms,
     header_image_url: data.header_image_url || null,
+    packing_slip_footer: data.packing_slip_footer || null,
     status: data.status || 'ACTIVE',
   });
 }
@@ -76,6 +77,7 @@ async function update(id, data, reqUser) {
     creditLimit: data.creditLimit !== undefined ? data.creditLimit : customer.creditLimit,
     paymentTerms: data.paymentTerms !== undefined ? data.paymentTerms : customer.paymentTerms,
     header_image_url: data.header_image_url !== undefined ? data.header_image_url : customer.header_image_url,
+    packing_slip_footer: data.packing_slip_footer !== undefined ? data.packing_slip_footer : customer.packing_slip_footer,
     status: data.status !== undefined ? data.status : customer.status,
   };
   await customer.update(updates);

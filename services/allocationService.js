@@ -23,7 +23,7 @@ async function allocateOrder(orderId, transaction = null) {
       throw new Error('Order not found');
     }
 
-    const allowedStatuses = ['DRAFT', 'CONFIRMED', 'BACKORDER'];
+    const allowedStatuses = ['DRAFT', 'NEW', 'CONFIRMED', 'ALLOCATED', 'PRINTED', 'BACKORDER'];
     if (!allowedStatuses.includes((order.status || '').toUpperCase())) {
       throw new Error(`Order cannot be allocated. Current status is ${order.status}`);
     }
@@ -164,6 +164,10 @@ async function allocateOrder(orderId, transaction = null) {
             productId: item.productId,
             quantityRequired: item.quantity,
             quantityPicked: 0,
+            locationId: item.locationId,
+            batchNumber: item.batchNumber,
+            bestBeforeDate: item.bestBeforeDate,
+            warehouseId: item.warehouseId,
           }, { transaction: t });
         }
         
@@ -174,7 +178,7 @@ async function allocateOrder(orderId, transaction = null) {
         }, { transaction: t });
       }
 
-      await order.update({ status: 'CONFIRMED' }, { transaction: t });
+      await order.update({ status: 'ALLOCATED' }, { transaction: t });
     } else {
       await order.update({ status: 'BACKORDER' }, { transaction: t });
     }

@@ -4,6 +4,7 @@ const { sequelize } = require('../config/db');
 const SavedAddress = sequelize.define('SavedAddress', {
   id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
   companyId: { type: DataTypes.INTEGER, allowNull: false },
+  customerId: { type: DataTypes.INTEGER, allowNull: true },
   recipientName: { type: DataTypes.STRING, allowNull: false },
   addressLine1: { type: DataTypes.STRING, allowNull: false },
   addressLine2: { type: DataTypes.STRING, allowNull: true },

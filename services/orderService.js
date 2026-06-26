@@ -1,4 +1,4 @@
-const { SalesOrder, OrderItem, Product, Customer, Company, PickList, PickListItem, PackingTask, Warehouse, Shipment, ProductStock, CourierMapping, sequelize } = require('../models');
+ const { SalesOrder, OrderItem, Product, Customer, Company, PickList, PickListItem, PackingTask, Warehouse, Shipment, ProductStock, CourierMapping, sequelize } = require('../models');
 const { Op } = require('sequelize');
 const inventoryService = require('./inventoryService');
 
@@ -72,7 +72,7 @@ async function list(reqUser, query = {}) {
     order: [['createdAt', 'DESC']],
     include: [
       { association: 'Company', attributes: ['id', 'name', 'code'] },
-      { association: 'Client', attributes: ['id', 'name', 'code', 'email', 'phone', 'contactPerson', 'address', 'city', 'state', 'country', 'postcode'] },
+      { association: 'Client', attributes: ['id', 'name', 'code', 'email', 'phone', 'contactPerson', 'address', 'city', 'state', 'country', 'postcode', 'header_image_url'] },
       {
         association: 'OrderItems',
         required: false,
@@ -101,8 +101,8 @@ async function list(reqUser, query = {}) {
 async function getById(id, reqUser) {
   const order = await SalesOrder.findByPk(id, {
     include: [
-      { association: 'Company' },
-      { association: 'Client' },
+      { association: 'Company', attributes: ['id', 'name', 'header_image_url'] },
+      { association: 'Client', attributes: ['id', 'name', 'code', 'email', 'phone', 'contactPerson', 'address', 'city', 'state', 'country', 'postcode', 'header_image_url', 'packing_slip_footer'] },
       { association: 'OrderItems', include: ['Product', 'Warehouse', 'Location'] },
       { association: 'PickLists', include: ['PickListItems', 'Warehouse', 'User'] },
       { association: 'PackingTasks', include: ['User'] },
@@ -111,7 +111,33 @@ async function getById(id, reqUser) {
   });
   if (!order) throw new Error('Order not found');
   if (reqUser.role !== 'super_admin' && order.companyId !== reqUser.companyId) throw new Error('Order not found');
-  return order;
+
+  const orderJson = order.get({ plain: true });
+
+  // Find matching template for client/channel
+  const { DespatchNoteTemplate } = require('../models');
+  let template = null;
+  if (orderJson.customerId) {
+    template = await DespatchNoteTemplate.findOne({
+      where: {
+        companyId: orderJson.companyId,
+        customerId: orderJson.customerId,
+        channel: orderJson.salesChannel || 'ALL'
+      }
+    });
+    if (!template && orderJson.salesChannel && orderJson.salesChannel !== 'ALL') {
+      template = await DespatchNoteTemplate.findOne({
+        where: {
+          companyId: orderJson.companyId,
+          customerId: orderJson.customerId,
+          channel: 'ALL'
+        }
+      });
+    }
+  }
+
+  orderJson.DespatchNoteTemplate = template;
+  return orderJson;
 }
 
 async function resolveCourierMapping(data, companyId, transaction = null) {
@@ -138,11 +164,15 @@ async function create(data, reqUser) {
   const t = await sequelize.transaction();
   try {
     await resolveCourierMapping(data, companyId, t);
-    const count = await SalesOrder.count({ where: { companyId }, transaction: t });
-    const sequenceNumber = count + 1;
+    const maxSeqOrder = await SalesOrder.findOne({
+      where: { companyId },
+      order: [['sequenceNumber', 'DESC']],
+      transaction: t
+    });
+    const sequenceNumber = maxSeqOrder ? (Number(maxSeqOrder.sequenceNumber) || 0) + 1 : 1;
     const orderNumber = data.orderNumber && data.orderNumber.trim()
       ? data.orderNumber.trim()
-      : `ORD-${Date.now()}-${String(sequenceNumber).padStart(4, '0')}`;
+      : `ORD-${String(sequenceNumber).padStart(4, '0')}`;
 
     // 1. If saveAddress is true, save this address to the customers table
     let customerId = data.customerId || null;
@@ -178,7 +208,7 @@ async function create(data, reqUser) {
       orderType: data.orderType || null,
       referenceNumber: data.referenceNumber || null,
       notes: data.notes || null,
-      status: 'DRAFT',
+      status: 'NEW',
       totalAmount: 0,
       createdBy: reqUser.id,
       recipientName: data.recipientName || null,
@@ -217,18 +247,20 @@ async function create(data, reqUser) {
         // Resolve Target Warehouse
         let targetWarehouseId = row.warehouseId || warehouse?.id;
         if (!targetWarehouseId) {
-          const firstStock = await ProductStock.findOne({
-            where: { productId: product.id, companyId, quantity: { [Op.gt]: sequelize.col('reserved') }, status: 'ACTIVE' },
-            include: [{ model: Warehouse, where: { status: 'ACTIVE' }, required: true, attributes: [] }],
+          // Auto-detect warehouse: find one with available inventory for this product
+          const { Inventory } = require('../models');
+          const invRow = await Inventory.findOne({
+            where: { productId: product.id },
+            include: [{ model: Warehouse, where: { companyId, status: 'ACTIVE' }, required: true, attributes: [] }],
             transaction: t
           });
-          targetWarehouseId = firstStock?.warehouseId;
+          targetWarehouseId = invRow?.warehouseId;
         }
         if (!targetWarehouseId) {
-          throw new Error(`Insufficient available stock for product ${product.sku} across all warehouses.`);
+          throw new Error(`No warehouse with stock found for product ${product.sku}. Please ensure stock has been received via a Purchase Order / GRN.`);
         }
 
-        // Option 2: Manual Location Allocation
+        // Option 2: Manual Location Allocation (hard allocation — specific location/batch/BBD chosen)
         if (row.locationId) {
           const stockRow = await ProductStock.findOne({
             where: {
@@ -247,18 +279,26 @@ async function create(data, reqUser) {
             throw new Error(`Insufficient available stock at location selection for product ${product.sku}.`);
           }
 
-          // Hard reserve in ProductStock row
+          // Hard reserve in ProductStock row (specific location/batch)
           await stockRow.increment('reserved', { by: qty, transaction: t });
-          
-          // Soft reserve in warehouse total
-          await inventoryService.reserveStockSoft({
+
+          // Also update warehouse-level Inventory summary + log (skip ProductStock FIFO loop since we already did it above)
+          const { Inventory, InventoryLog } = require('../models');
+          const [inv] = await Inventory.findOrCreate({
+            where: { productId: product.id, warehouseId: targetWarehouseId },
+            defaults: { quantity: 0, reservedQuantity: 0 },
+            transaction: t
+          });
+          await inv.increment('reservedQuantity', { by: qty, transaction: t });
+          await InventoryLog.create({
             productId: product.id,
             warehouseId: targetWarehouseId,
+            type: 'ALLOCATE',
             quantity: qty,
             referenceId: order.orderNumber,
-            reason: `Order: ${order.orderNumber}`,
+            reason: `Order (Hard Alloc): ${order.orderNumber}`,
             userId: reqUser.id
-          }, t);
+          }, { transaction: t });
 
           // Create hard-allocated OrderItem
           await OrderItem.create({
@@ -272,21 +312,21 @@ async function create(data, reqUser) {
             bestBeforeDate: row.bestBeforeDate || null
           }, { transaction: t });
         } else {
-          // Option 1: Soft Allocation
+          // Option 1: Soft Allocation (no specific location yet — just reserve at warehouse level)
           hasSoftAllocations = true;
 
-          // Verify total stock in selected warehouse is sufficient for soft reservation
-          const stocks = await ProductStock.findAll({
-            where: { productId: product.id, warehouseId: targetWarehouseId, companyId, status: 'ACTIVE' },
-            include: [{ model: Warehouse, where: { status: 'ACTIVE' }, required: true, attributes: [] }],
+          // Check available stock via Inventory table (warehouse-level summary — most reliable after GRN)
+          const { Inventory } = require('../models');
+          const invRow = await Inventory.findOne({
+            where: { productId: product.id, warehouseId: targetWarehouseId },
             transaction: t
           });
-          const totalAvail = stocks.reduce((sum, s) => sum + (Number(s.quantity) - Number(s.reserved)), 0);
+          const totalAvail = invRow ? (Number(invRow.quantity) - Number(invRow.reservedQuantity)) : 0;
           if (totalAvail < qty) {
-            throw new Error(`Insufficient available warehouse stock for product ${product.sku}.`);
+            throw new Error(`Insufficient available stock for product ${product.sku}. Available: ${totalAvail}, Requested: ${qty}.`);
           }
 
-          // Soft reserve in warehouse total only
+          // Soft reserve: updates Inventory.reservedQuantity AND ProductStock.reserved FIFO (prevents oversell)
           await inventoryService.reserveStockSoft({
             productId: product.id,
             warehouseId: targetWarehouseId,
@@ -296,7 +336,7 @@ async function create(data, reqUser) {
             userId: reqUser.id
           }, t);
 
-          // Create soft-allocated OrderItem (no locationId)
+          // Create soft-allocated OrderItem (no locationId — to be assigned during pick)
           await OrderItem.create({
             salesOrderId: order.id,
             productId: product.id,
@@ -334,6 +374,10 @@ async function create(data, reqUser) {
             productId: item.productId,
             quantityRequired: item.quantity,
             quantityPicked: 0,
+            locationId: item.locationId,
+            batchNumber: item.batchNumber,
+            bestBeforeDate: item.bestBeforeDate,
+            warehouseId: item.warehouseId,
           }, { transaction: t });
         }
         await PackingTask.create({
@@ -343,10 +387,10 @@ async function create(data, reqUser) {
         }, { transaction: t });
       }
 
-      await order.update({ status: 'CONFIRMED' }, { transaction: t });
+      await order.update({ status: 'ALLOCATED' }, { transaction: t });
     } else {
-      // It remains DRAFT if soft allocations exist
-      await order.update({ status: 'DRAFT' }, { transaction: t });
+      // It remains NEW if soft allocations exist
+      await order.update({ status: 'NEW' }, { transaction: t });
     }
 
     await t.commit();
@@ -368,9 +412,9 @@ async function update(id, data, reqUser) {
     if (!order) throw new Error('Order not found');
     if (reqUser.role !== 'super_admin' && order.companyId !== reqUser.companyId) throw new Error('Order not found');
 
-    const allowedStatuses = ['DRAFT', 'CONFIRMED', 'BACKORDER'];
+    const allowedStatuses = ['DRAFT', 'NEW', 'CONFIRMED', 'ALLOCATED', 'PRINTED', 'BACKORDER'];
     if (!allowedStatuses.includes((order.status || '').toUpperCase())) {
-      throw new Error('Only DRAFT, CONFIRMED, or BACKORDER orders can be edited');
+      throw new Error('Only NEW, ALLOCATED, PRINTED, or BACKORDER orders can be edited');
     }
 
     // 1. Unreserve OLD items correctly (only if we are updating items)
@@ -489,14 +533,24 @@ async function update(id, data, reqUser) {
           }
 
           await stockRow.increment('reserved', { by: qty, transaction: t });
-          await inventoryService.reserveStockSoft({
+
+          // Also update warehouse-level Inventory summary + log
+          const { Inventory, InventoryLog } = require('../models');
+          const [inv] = await Inventory.findOrCreate({
+            where: { productId: product.id, warehouseId: targetWarehouseId },
+            defaults: { quantity: 0, reservedQuantity: 0 },
+            transaction: t
+          });
+          await inv.increment('reservedQuantity', { by: qty, transaction: t });
+          await InventoryLog.create({
             productId: product.id,
             warehouseId: targetWarehouseId,
+            type: 'ALLOCATE',
             quantity: qty,
             referenceId: order.orderNumber,
-            reason: `Order: ${order.orderNumber}`,
+            reason: `Order (Hard Alloc Update): ${order.orderNumber}`,
             userId: reqUser.id
-          }, t);
+          }, { transaction: t });
 
           await OrderItem.create({
             salesOrderId: order.id,
@@ -511,6 +565,17 @@ async function update(id, data, reqUser) {
         } else {
           // Option 1: Soft Allocation
           hasSoftAllocations = true;
+
+          // Check available stock via Inventory table
+          const { Inventory } = require('../models');
+          const invRow = await Inventory.findOne({
+            where: { productId: product.id, warehouseId: targetWarehouseId },
+            transaction: t
+          });
+          const totalAvail = invRow ? (Number(invRow.quantity) - Number(invRow.reservedQuantity)) : 0;
+          if (totalAvail < qty) {
+            throw new Error(`Insufficient available stock for product ${product.sku}. Available: ${totalAvail}, Requested: ${qty}.`);
+          }
 
           await inventoryService.reserveStockSoft({
             productId: product.id,
@@ -564,6 +629,10 @@ async function update(id, data, reqUser) {
               productId: item.productId,
               quantityRequired: item.quantity,
               quantityPicked: 0,
+              locationId: item.locationId,
+              batchNumber: item.batchNumber,
+              bestBeforeDate: item.bestBeforeDate,
+              warehouseId: item.warehouseId,
             }, { transaction: t });
           }
           await PackingTask.create({
@@ -573,9 +642,9 @@ async function update(id, data, reqUser) {
           }, { transaction: t });
         }
 
-        await order.update({ status: 'CONFIRMED' }, { transaction: t });
+        await order.update({ status: 'ALLOCATED' }, { transaction: t });
       } else {
-        await order.update({ status: 'DRAFT' }, { transaction: t });
+        await order.update({ status: 'NEW' }, { transaction: t });
       }
     }
 
@@ -598,7 +667,7 @@ async function remove(id, reqUser) {
     if (!order) throw new Error('Order not found');
     if (reqUser.role !== 'super_admin' && order.companyId !== reqUser.companyId) throw new Error('Order not found');
 
-    const allowedStatuses = ['DRAFT', 'CONFIRMED', 'BACKORDER', 'PICK_LIST_CREATED'];
+    const allowedStatuses = ['DRAFT', 'NEW', 'CONFIRMED', 'ALLOCATED', 'PRINTED', 'BACKORDER', 'PICK_LIST_CREATED'];
     const status = (order.status || '').toUpperCase();
     if (!allowedStatuses.includes(status)) {
       throw new Error(`This sales order cannot be deleted. Current status: ${status || 'Unknown'}.`);
@@ -746,7 +815,7 @@ async function bulkAction(data, reqUser) {
       } else if (action === 'mark_despatched') {
         const t = await sequelize.transaction();
         try {
-          await order.update({ status: 'SHIPPED' }, { transaction: t });
+          await order.update({ status: 'DISPATCHED' }, { transaction: t });
           
           let shipment = await Shipment.findOne({ where: { salesOrderId: order.id }, transaction: t });
           if (!shipment) {
@@ -799,7 +868,7 @@ async function bulkAction(data, reqUser) {
       } else if (action === 'confirm' || action === 'uncancel') {
         const t = await sequelize.transaction();
         try {
-          await order.update({ status: 'CONFIRMED' }, { transaction: t });
+          await order.update({ status: 'ALLOCATED' }, { transaction: t });
           await t.commit();
           
           const allocationService = require('./allocationService');
@@ -936,7 +1005,11 @@ async function bulkAction(data, reqUser) {
                   pickListId: pl.id,
                   productId: item.productId,
                   quantityRequired: item.quantity,
-                  quantityPicked: item.quantity
+                  quantityPicked: item.quantity,
+                  locationId: item.locationId,
+                  batchNumber: item.batchNumber,
+                  bestBeforeDate: item.bestBeforeDate,
+                  warehouseId: item.warehouseId,
                 }, { transaction: t });
               }
 
@@ -989,7 +1062,7 @@ async function allocateAllOrders(reqUser) {
   // Find all orders that are in DRAFT or BACKORDER status
   const orders = await SalesOrder.findAll({
     where: {
-      status: { [Op.in]: ['DRAFT', 'BACKORDER'] },
+      status: { [Op.in]: ['DRAFT', 'NEW', 'BACKORDER'] },
       ...companyWhere
     },
     order: [
@@ -1080,17 +1153,22 @@ async function importCsv(rows, reqUser) {
     const createdOrders = [];
     const warehouse = await Warehouse.findOne({ where: { companyId, status: 'ACTIVE' }, transaction: t });
     const allProducts = await Product.findAll({ where: { companyId }, transaction: t });
-    let count = await SalesOrder.count({ where: { companyId }, transaction: t });
+    const maxSeqOrder = await SalesOrder.findOne({
+      where: { companyId },
+      order: [['sequenceNumber', 'DESC']],
+      transaction: t
+    });
+    let maxSeq = maxSeqOrder ? (Number(maxSeqOrder.sequenceNumber) || 0) : 0;
 
     for (const groupKey of Object.keys(ordersGrouped)) {
       const orderData = ordersGrouped[groupKey];
       if (orderData.items.length === 0) continue;
 
-      count += 1;
-      const sequenceNumber = count;
+      maxSeq += 1;
+      const sequenceNumber = maxSeq;
       const finalOrderNumber = orderData.orderNumber 
         ? orderData.orderNumber 
-        : `ORD-${Date.now()}-${String(sequenceNumber).padStart(4, '0')}`;
+        : `ORD-${String(sequenceNumber).padStart(4, '0')}`;
 
       const salesOrder = await SalesOrder.create({
         companyId,
@@ -1106,7 +1184,7 @@ async function importCsv(rows, reqUser) {
         orderType: orderData.orderType,
         referenceNumber: orderData.referenceNumber,
         notes: orderData.notes,
-        status: 'DRAFT',
+        status: 'NEW',
         totalAmount: 0,
         createdBy: reqUser.id,
         recipientName: orderData.recipientName,
@@ -1235,7 +1313,17 @@ function drawCode39Barcode(doc, value, x, y, height = 30, widthPerModule = 0.75)
 async function generateDespatchNotePdf(id, reqUser) {
   const order = await getById(id, reqUser);
   const company = await Company.findByPk(order.companyId);
-  
+
+  const allowedStatuses = ['ALLOCATED', 'CONFIRMED', 'PRINTED', 'PICKING_IN_PROGRESS', 'PICKING', 'PICKED', 'PACKING_IN_PROGRESS', 'PACKING', 'PACKED', 'SHIPPED', 'DISPATCHED', 'DELIVERED', 'COMPLETED'];
+  if (!allowedStatuses.includes((order.status || '').toUpperCase())) {
+    throw new Error('Cannot print despatch note: Stock has not been allocated to this order yet.');
+  }
+
+  const currentStatus = (order.status || '').toUpperCase();
+  if (currentStatus === 'ALLOCATED' || currentStatus === 'CONFIRMED') {
+    await order.update({ status: 'PRINTED' });
+  }
+
   const PDFDocument = require('pdfkit');
   const axios = require('axios');
   const fs = require('fs');
@@ -1442,5 +1530,228 @@ async function generateDespatchNotePdf(id, reqUser) {
   return { buffer, filename: `DespatchNote-${order.orderNumber}.pdf` };
 }
 
-module.exports = { list, getById, create, update, remove, bulkAction, allocateAllOrders, importCsv, generateDespatchNotePdf };
+/**
+ * One-time repair: Re-sync ProductStock.reserved from active sales orders.
+ * Run this when deploying the soft-allocation fix to fix existing pre-fix orders.
+ * Safe to run multiple times (idempotent).
+ */
+async function syncReservations(reqUser) {
+  if (reqUser.role !== 'super_admin' && reqUser.role !== 'company_admin') {
+    throw new Error('Not authorized to run reservation sync');
+  }
+
+  const companyWhere = reqUser.role === 'super_admin' ? {} : { companyId: reqUser.companyId };
+
+  // 1. Reset ALL ProductStock.reserved to 0 for this company (we'll rebuild from scratch)
+  //    Only reset ACTIVE stock rows — PENDING rows are unaffected
+  await ProductStock.update(
+    { reserved: 0 },
+    { where: { ...companyWhere, status: 'ACTIVE' } }
+  );
+
+  // 2. Reset Inventory.reservedQuantity to 0 for this company
+  const { Inventory } = require('../models');
+  const inventoryRows = await Inventory.findAll({
+    include: [{ model: ProductStock, where: { ...companyWhere }, required: true, attributes: [] }]
+  });
+  // Alternative: direct where if Inventory has companyId... it doesn't, so use productId filter
+  const companyProducts = await ProductStock.findAll({
+    where: { ...companyWhere },
+    attributes: ['productId', 'warehouseId'],
+    group: ['productId', 'warehouseId']
+  });
+  for (const cp of companyProducts) {
+    await Inventory.update(
+      { reservedQuantity: 0 },
+      { where: { productId: cp.productId, warehouseId: cp.warehouseId } }
+    );
+  }
+
+  // 3. Find all active orders (DRAFT, CONFIRMED, BACKORDER) and rebuild reservations
+  const activeOrders = await SalesOrder.findAll({
+    where: {
+      ...companyWhere,
+      status: { [Op.in]: ['DRAFT', 'NEW', 'CONFIRMED', 'ALLOCATED', 'PRINTED', 'PICKING_IN_PROGRESS', 'PICKING', 'PICKED', 'PACKING_IN_PROGRESS', 'PACKING', 'PACKED', 'BACKORDER'] }
+    },
+    include: [{ association: 'OrderItems' }]
+  });
+
+  let fixedOrders = 0;
+  let totalReserved = 0;
+
+  for (const order of activeOrders) {
+    for (const item of (order.OrderItems || [])) {
+      const warehouseId = item.warehouseId;
+      if (!warehouseId) continue;
+
+      const qty = Number(item.quantity) || 0;
+      if (qty <= 0) continue;
+
+      if (item.locationId) {
+        // Hard-allocated: reserve the specific ProductStock row
+        const stockRow = await ProductStock.findOne({
+          where: {
+            productId: item.productId,
+            warehouseId,
+            locationId: item.locationId,
+            batchNumber: item.batchNumber || null,
+            bestBeforeDate: item.bestBeforeDate || null,
+            status: 'ACTIVE'
+          }
+        });
+        if (stockRow) {
+          await stockRow.increment('reserved', { by: qty });
+        }
+      } else {
+        // Soft-allocated: reserve FIFO across ProductStock rows in the warehouse
+        const stockRows = await ProductStock.findAll({
+          where: {
+            productId: item.productId,
+            warehouseId,
+            status: 'ACTIVE',
+            quantity: { [Op.gt]: sequelize.col('reserved') }
+          },
+          order: [['createdAt', 'ASC']]
+        });
+        let remaining = qty;
+        for (const row of stockRows) {
+          if (remaining <= 0) break;
+          const avail = Number(row.quantity) - Number(row.reserved);
+          const toReserve = Math.min(avail, remaining);
+          await row.increment('reserved', { by: toReserve });
+          remaining -= toReserve;
+        }
+      }
+
+      // Rebuild Inventory.reservedQuantity
+      const [inv] = await Inventory.findOrCreate({
+        where: { productId: item.productId, warehouseId },
+        defaults: { quantity: 0, reservedQuantity: 0 }
+      });
+      await inv.increment('reservedQuantity', { by: qty });
+
+      totalReserved += qty;
+    }
+    fixedOrders++;
+  }
+
+  return {
+    message: `Reservation sync complete. Rebuilt reservations for ${fixedOrders} active orders. Total units reserved: ${totalReserved}.`,
+    fixedOrders,
+    totalReserved
+  };
+}
+
+/**
+ * Sync reservations for a single product in a single warehouse.
+ * Fast, target-specific recalculation after stock levels change.
+ */
+async function syncReservationsForProduct(productId, warehouseId, transaction = null) {
+  const t = transaction;
+  const { Inventory, ProductStock, SalesOrder, OrderItem, sequelize } = require('../models');
+  const { Op } = require('sequelize');
+
+  // 1. Reset ProductStock.reserved to 0 for this product in this warehouse
+  await ProductStock.update(
+    { reserved: 0 },
+    {
+      where: { productId, warehouseId, status: 'ACTIVE' },
+      transaction: t
+    }
+  );
+
+  // 2. Reset Inventory.reservedQuantity to 0 for this product in this warehouse
+  await Inventory.update(
+    { reservedQuantity: 0 },
+    {
+      where: { productId, warehouseId },
+      transaction: t
+    }
+  );
+
+  // 3. Find all active orders (DRAFT, CONFIRMED, BACKORDER) with items for this product/warehouse
+  const activeItems = await OrderItem.findAll({
+    where: { productId, warehouseId },
+    include: [{
+      association: 'SalesOrder',
+      where: { status: { [Op.in]: ['DRAFT', 'NEW', 'CONFIRMED', 'ALLOCATED', 'PRINTED', 'PICKING_IN_PROGRESS', 'PICKING', 'PICKED', 'PACKING_IN_PROGRESS', 'PACKING', 'PACKED', 'BACKORDER'] } },
+      required: true
+    }],
+    transaction: t
+  });
+
+  let totalReserved = 0;
+
+  for (const item of activeItems) {
+    const qty = Number(item.quantity) || 0;
+    if (qty <= 0) continue;
+
+    if (item.locationId) {
+      // Hard-allocated: reserve the specific ProductStock row
+      const stockRow = await ProductStock.findOne({
+        where: {
+          productId,
+          warehouseId,
+          locationId: item.locationId,
+          batchNumber: item.batchNumber || null,
+          bestBeforeDate: item.bestBeforeDate || null,
+          status: 'ACTIVE'
+        },
+        transaction: t
+      });
+      if (stockRow) {
+        await stockRow.increment('reserved', { by: qty, transaction: t });
+      }
+    } else {
+      // Soft-allocated: reserve FIFO across ProductStock rows in the warehouse
+      const stockRows = await ProductStock.findAll({
+        where: {
+          productId,
+          warehouseId,
+          status: 'ACTIVE',
+          quantity: { [Op.gt]: sequelize.col('reserved') }
+        },
+        order: [['createdAt', 'ASC']],
+        transaction: t
+      });
+      let remaining = qty;
+      for (const row of stockRows) {
+        if (remaining <= 0) break;
+        const avail = Number(row.quantity) - Number(row.reserved);
+        if (avail <= 0) continue;
+        const toReserve = Math.min(avail, remaining);
+        await row.increment('reserved', { by: toReserve, transaction: t });
+        remaining -= toReserve;
+      }
+    }
+
+    // Rebuild Inventory.reservedQuantity
+    const [inv] = await Inventory.findOrCreate({
+      where: { productId, warehouseId },
+      defaults: { quantity: 0, reservedQuantity: 0 },
+      transaction: t
+    });
+    await inv.increment('reservedQuantity', { by: qty, transaction: t });
+
+    totalReserved += qty;
+  }
+
+  return totalReserved;
+}
+
+async function markAsPrinted(id, reqUser) {
+  const order = await SalesOrder.findByPk(id);
+  if (!order) throw new Error('Order not found');
+  if (reqUser.role !== 'super_admin' && order.companyId !== reqUser.companyId) {
+    throw new Error('Order not found');
+  }
+
+  const currentStatus = (order.status || '').toUpperCase();
+  if (currentStatus === 'ALLOCATED' || currentStatus === 'CONFIRMED') {
+    await order.update({ status: 'PRINTED' });
+  }
+  return { success: true, status: order.status };
+}
+
+module.exports = { list, getById, create, update, remove, bulkAction, allocateAllOrders, importCsv, generateDespatchNotePdf, syncReservations, syncReservationsForProduct, markAsPrinted };
 

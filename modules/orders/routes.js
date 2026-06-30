@@ -5,6 +5,7 @@ const customerController = require('../../controllers/customerController');
 const courierMappingController = require('../../controllers/courierMappingController');
 const despatchNoteTemplateController = require('../../controllers/despatchNoteTemplateController');
 const { authenticate, requireRole } = require('../../middlewares/auth');
+const courierServiceController = require('../../controllers/courierServiceController');
 
 router.use(authenticate);
 
@@ -16,6 +17,7 @@ router.get('/sales/:id', requireRole('super_admin', 'company_admin', 'warehouse_
 router.post('/sales', requireRole('super_admin', 'company_admin'), orderController.create);
 router.post('/sales/:id/allocate', requireRole('super_admin', 'company_admin', 'warehouse_manager', 'inventory_manager'), orderController.allocate);
 router.put('/sales/:id', requireRole('super_admin', 'company_admin'), orderController.update);
+router.put('/sales/:id/notes', requireRole('super_admin', 'company_admin', 'warehouse_manager', 'inventory_manager', 'picker', 'packer', 'viewer'), orderController.updateNotes);
 router.post('/sales/:id/printed', requireRole('super_admin', 'company_admin', 'warehouse_manager', 'inventory_manager', 'picker', 'packer', 'viewer'), orderController.markAsPrinted);
 router.delete('/sales/:id', requireRole('super_admin', 'company_admin'), orderController.remove);
 
@@ -43,5 +45,12 @@ router.get('/courier-mappings/available-services', requireRole('super_admin', 'c
 router.post('/courier-mappings', requireRole('super_admin', 'company_admin', 'warehouse_manager', 'inventory_manager'), courierMappingController.create);
 router.put('/courier-mappings/:id', requireRole('super_admin', 'company_admin', 'warehouse_manager', 'inventory_manager'), courierMappingController.update);
 router.delete('/courier-mappings/:id', requireRole('super_admin', 'company_admin', 'warehouse_manager', 'inventory_manager'), courierMappingController.remove);
+
+// Courier service codes CRUD & CSV import
+router.get('/courier-services', requireRole('super_admin', 'company_admin', 'warehouse_manager', 'inventory_manager', 'viewer', 'picker', 'packer'), courierServiceController.list);
+router.post('/courier-services', requireRole('super_admin', 'company_admin'), courierServiceController.create);
+router.put('/courier-services/:id', requireRole('super_admin', 'company_admin'), courierServiceController.update);
+router.delete('/courier-services/:id', requireRole('super_admin', 'company_admin'), courierServiceController.remove);
+router.post('/courier-services/import-csv', requireRole('super_admin', 'company_admin'), courierServiceController.importCsv);
 
 module.exports = router;

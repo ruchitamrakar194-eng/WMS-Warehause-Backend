@@ -90,6 +90,7 @@ async function update(id, data, reqUser) {
   }
 
   // Shipped/Delivered hone ke baad inventory & product stock se quantity minus (sirf ek hi bar)
+  if (becomesShippedOrDelivered && !shipment.stockDeducted) {
     const t = await sequelize.transaction();
     try {
       const orderItems = await OrderItem.findAll({ where: { salesOrderId: order.id }, transaction: t });
@@ -116,6 +117,7 @@ async function update(id, data, reqUser) {
       await t.rollback();
       console.error('Shipment stock deduct failed:', err.message);
     }
+  }
 
   return getById(id, reqUser);
 }

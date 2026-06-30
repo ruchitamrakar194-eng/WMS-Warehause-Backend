@@ -10,6 +10,13 @@ async function list(reqUser, query = {}) {
     where.companyId = reqUser.companyId;
   }
 
+  // Filter: Client
+  if (reqUser.clientId) {
+    where.customerId = reqUser.clientId;
+  } else if (query.clientId && query.clientId !== 'all') {
+    where.customerId = query.clientId;
+  }
+
   // Filter: Order Status
   if (query.status && query.status !== 'all') {
     if (typeof query.status === 'string' && query.status.includes(',')) {
@@ -208,6 +215,12 @@ async function create(data, reqUser) {
       orderType: data.orderType || null,
       referenceNumber: data.referenceNumber || null,
       notes: data.notes || null,
+      notesFromBuyer: data.notesFromBuyer || null,
+      notesToBuyer: data.notesToBuyer || null,
+      giftNote: data.giftNote || null,
+      internalNotes: data.internalNotes || null,
+      customField2: data.customField2 || null,
+      customField3: data.customField3 || null,
       status: 'NEW',
       totalAmount: 0,
       createdBy: reqUser.id,
@@ -473,6 +486,12 @@ async function update(id, data, reqUser) {
       orderType: data.orderType !== undefined ? data.orderType : order.orderType,
       referenceNumber: data.referenceNumber !== undefined ? data.referenceNumber : order.referenceNumber,
       notes: data.notes !== undefined ? data.notes : order.notes,
+      notesFromBuyer: data.notesFromBuyer !== undefined ? data.notesFromBuyer : order.notesFromBuyer,
+      notesToBuyer: data.notesToBuyer !== undefined ? data.notesToBuyer : order.notesToBuyer,
+      giftNote: data.giftNote !== undefined ? data.giftNote : order.giftNote,
+      internalNotes: data.internalNotes !== undefined ? data.internalNotes : order.internalNotes,
+      customField2: data.customField2 !== undefined ? data.customField2 : order.customField2,
+      customField3: data.customField3 !== undefined ? data.customField3 : order.customField3,
       
       recipientName: data.recipientName !== undefined ? data.recipientName : order.recipientName,
       addressLine1: data.addressLine1 !== undefined ? data.addressLine1 : order.addressLine1,
@@ -1516,9 +1535,21 @@ async function generateDespatchNotePdf(id, reqUser) {
   doc.moveDown(1);
   if (doc.y > 700) doc.addPage();
 
-  if (order.notes) {
+  let notesStr = '';
+  if (order.notesFromBuyer) {
+    notesStr += `Note From Buyer:\n${order.notesFromBuyer}\n\n`;
+  }
+  if (order.notesToBuyer) {
+    notesStr += `Note To Buyer:\n${order.notesToBuyer}\n\n`;
+  }
+  if (order.notes && !order.notesFromBuyer && !order.notesToBuyer) {
+    notesStr += `${order.notes}\n\n`;
+  }
+  notesStr = notesStr.trim();
+
+  if (notesStr) {
     doc.fontSize(9).font('Helvetica-Bold').fillColor('#555555').text('Notes / Instructions:', 40, doc.y);
-    doc.fontSize(9).font('Helvetica').fillColor('#333333').text(order.notes, 40, doc.y + 3, { width: 480 });
+    doc.fontSize(9).font('Helvetica').fillColor('#333333').text(notesStr, 40, doc.y + 3, { width: 480 });
     doc.moveDown();
   }
 
@@ -1753,5 +1784,25 @@ async function markAsPrinted(id, reqUser) {
   return { success: true, status: order.status };
 }
 
-module.exports = { list, getById, create, update, remove, bulkAction, allocateAllOrders, importCsv, generateDespatchNotePdf, syncReservations, syncReservationsForProduct, markAsPrinted };
+async function updateNotes(id, data, reqUser) {
+  const order = await SalesOrder.findByPk(id);
+  if (!order) throw new Error('Order not found');
+  if (reqUser.role !== 'super_admin' && order.companyId !== reqUser.companyId) {
+    throw new Error('Order not found');
+  }
+
+  await order.update({
+    notesFromBuyer: data.notesFromBuyer !== undefined ? data.notesFromBuyer : order.notesFromBuyer,
+    notesToBuyer: data.notesToBuyer !== undefined ? data.notesToBuyer : order.notesToBuyer,
+    giftNote: data.giftNote !== undefined ? data.giftNote : order.giftNote,
+    internalNotes: data.internalNotes !== undefined ? data.internalNotes : order.internalNotes,
+    externalRef: data.externalRef !== undefined ? data.externalRef : order.externalRef,
+    customField2: data.customField2 !== undefined ? data.customField2 : order.customField2,
+    customField3: data.customField3 !== undefined ? data.customField3 : order.customField3,
+  });
+
+  return getById(id, reqUser);
+}
+
+module.exports = { list, getById, create, update, updateNotes, remove, bulkAction, allocateAllOrders, importCsv, generateDespatchNotePdf, syncReservations, syncReservationsForProduct, markAsPrinted };
 

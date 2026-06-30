@@ -1,4 +1,4 @@
-const { CourierMapping } = require('../models');
+const { CourierMapping, CourierService } = require('../models');
 
 async function list(req, res, next) {
   try {
@@ -102,6 +102,28 @@ async function remove(req, res, next) {
 
 async function getAvailableServices(req, res, next) {
   try {
+    const companyId = req.user.companyId;
+    
+    // Check if there are custom courier services defined for this company
+    const customServices = await CourierService.findAll({
+      where: { companyId },
+      order: [['courier', 'ASC'], ['serviceName', 'ASC']]
+    });
+
+    if (customServices && customServices.length > 0) {
+      const services = {};
+      for (const cs of customServices) {
+        if (!services[cs.courier]) {
+          services[cs.courier] = [];
+        }
+        // Avoid duplicate service names for same courier
+        if (!services[cs.courier].includes(cs.serviceName)) {
+          services[cs.courier].push(cs.serviceName);
+        }
+      }
+      return res.json({ success: true, data: services });
+    }
+
     const services = {
       'Royal Mail': [
         'Royal Mail Tracked 24',

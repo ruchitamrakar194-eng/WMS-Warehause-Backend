@@ -175,4 +175,14 @@ async function markAsPrinted(req, res, next) {
   }
 }
 
-module.exports = { list, getById, create, update, remove, bulkAction, allocate, allocateAll, listSavedAddresses, saveAddress, importCsv, downloadPdf, updateSavedAddress, deleteSavedAddress, syncReservations, markAsPrinted };
+async function updateNotes(req, res, next) {
+  try {
+    const data = await orderService.updateNotes(req.params.id, req.body, req.user);
+    res.json({ success: true, data });
+  } catch (err) {
+    if (err.message === 'Order not found') return res.status(404).json({ success: false, message: err.message });
+    next(err);
+  }
+}
+
+module.exports = { list, getById, create, update, updateNotes, remove, bulkAction, allocate, allocateAll, listSavedAddresses, saveAddress, importCsv, downloadPdf, updateSavedAddress, deleteSavedAddress, syncReservations, markAsPrinted };

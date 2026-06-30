@@ -13,6 +13,12 @@ const SalesOrder = sequelize.define('SalesOrder', {
   orderType: { type: DataTypes.STRING, allowNull: true },
   referenceNumber: { type: DataTypes.STRING, allowNull: true },
   notes: { type: DataTypes.TEXT, allowNull: true },
+  notesFromBuyer: { type: DataTypes.TEXT, allowNull: true, field: 'notes_from_buyer' },
+  notesToBuyer: { type: DataTypes.TEXT, allowNull: true, field: 'notes_to_buyer' },
+  giftNote: { type: DataTypes.TEXT, allowNull: true, field: 'gift_note' },
+  internalNotes: { type: DataTypes.TEXT, allowNull: true, field: 'internal_notes' },
+  customField2: { type: DataTypes.STRING, allowNull: true, field: 'custom_field2' },
+  customField3: { type: DataTypes.STRING, allowNull: true, field: 'custom_field3' },
   status: {
     type: DataTypes.STRING,
     defaultValue: 'NEW',

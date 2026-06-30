@@ -437,7 +437,7 @@ async function createProduct(data, reqUser) {
   if (reqUser.role !== 'super_admin' && reqUser.role !== 'company_admin' && reqUser.role !== 'inventory_manager') {
     throw new Error('Not allowed to create product');
   }
-  
+
   const clientId = data.clientId || null;
   if (!clientId) throw new Error('Client/Owner is required');
 
@@ -963,7 +963,7 @@ async function removeCategory(id, reqUser) {
 }
 
 async function listStock(reqUser, query = {}) {
-  const { ProductStock, OrderItem, SalesOrder, Product, Warehouse, Client } = require('../models');
+  const { ProductStock, OrderItem, SalesOrder, Product, Warehouse, Customer } = require('../models');
   const { Op } = require('sequelize');
 
   const where = {};
@@ -1031,32 +1031,45 @@ async function listStock(reqUser, query = {}) {
     reservationMap[key] = (reservationMap[key] || 0) + (Number(item.quantity) || 0);
   }
 
-  // Group physical reservations by productId + warehouseId
-  const stockReservationMap = {};
-  for (const row of stocks) {
-    const key = `${row.productId}-${row.warehouseId}`;
-    stockReservationMap[key] = (stockReservationMap[key] || 0) + (Number(row.reserved) || 0);
-  }
+  // Sort physical stocks by createdAt ASC (FIFO) so oldest stock is reserved first in-memory
+  stocks.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
 
-  // Find any unassigned soft-allocations (reservations not mapped to physical stock rows)
+  // Initialize and distribute reservations in memory dynamically (so it stays 100% in sync with ledger logs)
+  const remainingReservations = { ...reservationMap };
+  const mappedStocks = stocks.map(s => {
+    const row = s.get({ plain: true });
+    row.reserved = 0; // reset/rebuild in memory dynamically
+    
+    const key = `${row.productId}-${row.warehouseId}`;
+    const qtyToDistribute = remainingReservations[key] || 0;
+    if (qtyToDistribute > 0) {
+      const rowReserved = Math.min(row.quantity, qtyToDistribute);
+      row.reserved = rowReserved;
+      remainingReservations[key] -= rowReserved;
+    }
+    return {
+      ...row,
+      toJSON() { return this; }
+    };
+  });
+
+  // Find any unassigned soft-allocations (reservations exceeding physical stock rows)
   const mockStocks = [];
-  for (const key of Object.keys(reservationMap)) {
-    const totalReserved = reservationMap[key];
-    const stockReserved = stockReservationMap[key] || 0;
-    if (totalReserved > stockReserved) {
-      const diff = totalReserved - stockReserved;
+  for (const key of Object.keys(remainingReservations)) {
+    const diff = remainingReservations[key];
+    if (diff > 0) {
       const [pId, whId] = key.split('-').map(Number);
 
       // Fetch Product, Warehouse, Client metadata for the mock row
       const product = await Product.findByPk(pId);
       if (!product || (reqUser.role !== 'super_admin' && product.companyId !== reqUser.companyId)) continue;
-      
+
       const warehouse = await Warehouse.findByPk(whId, { include: ['Company'] });
       let client = null;
       if (reqUser.clientId || query.clientId) {
-        client = await Client.findByPk(reqUser.clientId || query.clientId, { attributes: ['id', 'name', 'code'] });
+        client = await Customer.findByPk(reqUser.clientId || query.clientId, { attributes: ['id', 'name', 'code'] });
       } else if (product?.clientId) {
-        client = await Client.findByPk(product.clientId, { attributes: ['id', 'name', 'code'] });
+        client = await Customer.findByPk(product.clientId, { attributes: ['id', 'name', 'code'] });
       }
 
       mockStocks.push({
@@ -1077,7 +1090,7 @@ async function listStock(reqUser, query = {}) {
     }
   }
 
-  return stocks.concat(mockStocks);
+  return mappedStocks.concat(mockStocks);
 }
 
 async function createStock(data, reqUser) {

@@ -69,6 +69,7 @@ app.get('/api/orders/sales/:id', authenticate, requireRole(...soRoles), orderCon
 app.get('/api/orders/sales/:id/pdf', authenticate, requireRole(...soRoles), orderController.downloadPdf);
 app.post('/api/orders/sales/:id/printed', authenticate, requireRole(...soRoles), orderController.markAsPrinted);
 app.put('/api/orders/sales/:id', authenticate, requireRole(...soWriteRoles), orderController.update);
+app.put('/api/orders/sales/:id/notes', authenticate, requireRole(...soRoles), orderController.updateNotes);
 app.delete('/api/orders/sales/:id', authenticate, requireRole(...soWriteRoles), orderController.remove);
 app.post('/api/orders/sales/:id/allocate', authenticate, requireRole('super_admin', 'company_admin', 'warehouse_manager', 'inventory_manager'), orderController.allocate);
 
@@ -200,9 +201,8 @@ async function start() {
     }
     const syncOptions = { alter: dialect === 'sqlite' };
 
-    // MySQL Manual Column Fixes helper
+    // MySQL and SQLite Manual Column Fixes helper
     const applyManualFixes = async () => {
-      if (dialect !== 'mysql') return;
       console.log('[DB] Applying manual column fixes...');
       const manualCols = [
         { t: 'inventory_adjustments', c: 'batch_id', type: 'INT' },
@@ -322,31 +322,44 @@ async function start() {
         { t: 'pick_list_items', c: 'location_id', type: 'INT' },
         { t: 'pick_list_items', c: 'batch_number', type: 'VARCHAR(255)' },
         { t: 'pick_list_items', c: 'best_before_date', type: 'DATE' },
+        { t: 'despatch_note_templates', c: 'show_footer_image', type: 'TINYINT(1) DEFAULT 1' },
+        { t: 'despatch_note_templates', c: 'show_footer_message', type: 'TINYINT(1) DEFAULT 1' },
+        { t: 'sales_orders', c: 'notes_from_buyer', type: 'TEXT' },
+        { t: 'sales_orders', c: 'notes_to_buyer', type: 'TEXT' },
+        { t: 'sales_orders', c: 'gift_note', type: 'TEXT' },
+        { t: 'sales_orders', c: 'internal_notes', type: 'TEXT' },
+        { t: 'sales_orders', c: 'custom_field2', type: 'VARCHAR(255)' },
+        { t: 'sales_orders', c: 'custom_field3', type: 'VARCHAR(255)' },
       ];
       for (const col of manualCols) {
         try {
           await sequelize.query(`ALTER TABLE ${col.t} ADD COLUMN ${col.c} ${col.type} NULL`);
           // console.log(`[DB] Column ${col.t}.${col.c} added successfully`);
         } catch (err) {
-          if (!err.message.includes('Duplicate column') && !err.message.includes('Table') && !err.message.includes("doesn't exist")) {
+          if (!err.message.includes('Duplicate column') && 
+              !err.message.includes('duplicate column name') && 
+              !err.message.includes('Table') && 
+              !err.message.includes("doesn't exist")) {
             console.warn(`[DB] Column ${col.t}.${col.c} error: ${err.message.slice(0, 60)}`);
           }
         }
       }
-      const manualAlters = [
-        { t: 'goods_receipts', c: 'total_expected', type: 'DECIMAL(12, 3)' },
-        { t: 'goods_receipts', c: 'total_received', type: 'DECIMAL(12, 3)' },
-        { t: 'goods_receipts', c: 'total_to_book', type: 'DECIMAL(12, 3)' },
-        { t: 'goods_receipt_items', c: 'expected_qty', type: 'DECIMAL(12, 3)' },
-        { t: 'goods_receipt_items', c: 'received_qty', type: 'DECIMAL(12, 3)' },
-        { t: 'goods_receipt_items', c: 'qty_to_book', type: 'DECIMAL(12, 3)' },
-      ];
-      for (const col of manualAlters) {
-        try {
-          await sequelize.query(`ALTER TABLE ${col.t} MODIFY COLUMN ${col.c} ${col.type}`);
-          // console.log(`[DB] Column ${col.t}.${col.c} altered to ${col.type}`);
-        } catch (err) {
-          // ignore if table/col doesn't exist yet, it will be created by sync
+      if (dialect === 'mysql') {
+        const manualAlters = [
+          { t: 'goods_receipts', c: 'total_expected', type: 'DECIMAL(12, 3)' },
+          { t: 'goods_receipts', c: 'total_received', type: 'DECIMAL(12, 3)' },
+          { t: 'goods_receipts', c: 'total_to_book', type: 'DECIMAL(12, 3)' },
+          { t: 'goods_receipt_items', c: 'expected_qty', type: 'DECIMAL(12, 3)' },
+          { t: 'goods_receipt_items', c: 'received_qty', type: 'DECIMAL(12, 3)' },
+          { t: 'goods_receipt_items', c: 'qty_to_book', type: 'DECIMAL(12, 3)' },
+        ];
+        for (const col of manualAlters) {
+          try {
+            await sequelize.query(`ALTER TABLE ${col.t} MODIFY COLUMN ${col.c} ${col.type}`);
+            // console.log(`[DB] Column ${col.t}.${col.c} altered to ${col.type}`);
+          } catch (err) {
+            // ignore if table/col doesn't exist yet, it will be created by sync
+          }
         }
       }
 
@@ -358,15 +371,24 @@ async function start() {
           console.warn('[DB] Unique index products error:', err.message);
         }
       }
+
+      // Ensure all reserved columns in product_stocks are defaulted to 0, not NULL
+      try {
+        await sequelize.query("UPDATE product_stocks SET reserved = 0 WHERE reserved IS NULL");
+      } catch (err) {
+        if (!err.message.includes("doesn't exist")) {
+          console.warn('[DB] product_stocks reserved reset error:', err.message);
+        }
+      }
     };
+
+    // Apply manual fixes first for all dialects
+    await applyManualFixes();
 
     if (dialect === 'mysql') {
       let syncDone = false;
       for (let attempt = 1; attempt <= 3 && !syncDone; attempt += 1) {
         try {
-          // Pre-sync manual columns so unique indexes can be created
-          if (attempt === 1) await applyManualFixes();
-
           await sequelize.sync(syncOptions);
           syncDone = true;
         } catch (syncErr) {

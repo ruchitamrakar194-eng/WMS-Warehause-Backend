@@ -36,6 +36,7 @@ const SupplierProduct = require('./SupplierProduct');
 const AuditLog = require('./AuditLog');
 const SavedAddress = require('./SavedAddress');
 const CourierMapping = require('./CourierMapping');
+const CourierService = require('./CourierService');
 const DespatchNoteTemplate = require('./DespatchNoteTemplate');
 
 
@@ -87,6 +88,10 @@ SavedAddress.belongsTo(Customer, { foreignKey: 'customerId', as: 'Client' });
 // CourierMapping
 Company.hasMany(CourierMapping, { foreignKey: 'companyId' });
 CourierMapping.belongsTo(Company, { foreignKey: 'companyId' });
+
+// CourierService
+Company.hasMany(CourierService, { foreignKey: 'companyId' });
+CourierService.belongsTo(Company, { foreignKey: 'companyId' });
 
 // DespatchNoteTemplate
 Company.hasMany(DespatchNoteTemplate, { foreignKey: 'companyId' });
@@ -310,4 +315,5 @@ module.exports = {
   SavedAddress,
   CourierMapping,
   DespatchNoteTemplate,
+  CourierService,
 };

@@ -16,7 +16,9 @@ const DespatchNoteTemplate = sequelize.define('DespatchNoteTemplate', {
   infoTitle: { type: DataTypes.STRING, allowNull: true },
   info: { type: DataTypes.TEXT, allowNull: true },
   pickingTableSortOrder: { type: DataTypes.STRING, allowNull: false, defaultValue: 'DEFAULT' },
-  highlightQuantities: { type: DataTypes.BOOLEAN, defaultValue: false }
+  highlightQuantities: { type: DataTypes.BOOLEAN, defaultValue: false },
+  showFooterImage: { type: DataTypes.BOOLEAN, defaultValue: true },
+  showFooterMessage: { type: DataTypes.BOOLEAN, defaultValue: true }
 }, {
   tableName: 'despatch_note_templates',
   timestamps: true,

@@ -73,7 +73,9 @@ async function create(data, reqUser) {
     infoTitle: data.infoTitle || null,
     info: data.info || null,
     pickingTableSortOrder: data.pickingTableSortOrder || 'DEFAULT',
-    highlightQuantities: !!data.highlightQuantities
+    highlightQuantities: !!data.highlightQuantities,
+    showFooterImage: data.showFooterImage !== undefined ? !!data.showFooterImage : true,
+    showFooterMessage: data.showFooterMessage !== undefined ? !!data.showFooterMessage : true
   });
 }
 
@@ -123,7 +125,9 @@ async function update(id, data, reqUser) {
     infoTitle: data.infoTitle !== undefined ? data.infoTitle : template.infoTitle,
     info: data.info !== undefined ? data.info : template.info,
     pickingTableSortOrder: data.pickingTableSortOrder !== undefined ? data.pickingTableSortOrder : template.pickingTableSortOrder,
-    highlightQuantities: data.highlightQuantities !== undefined ? !!data.highlightQuantities : template.highlightQuantities
+    highlightQuantities: data.highlightQuantities !== undefined ? !!data.highlightQuantities : template.highlightQuantities,
+    showFooterImage: data.showFooterImage !== undefined ? !!data.showFooterImage : template.showFooterImage,
+    showFooterMessage: data.showFooterMessage !== undefined ? !!data.showFooterMessage : template.showFooterMessage
   };
 
   await template.update(updates);
